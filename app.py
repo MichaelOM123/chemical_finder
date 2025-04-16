@@ -62,23 +62,26 @@ if uploaded_file:
             treffer_df = finde_treffer(row["Chemikalie"], row["Menge"], row["Einheit"], data)
             results = pd.concat([results, treffer_df], ignore_index=True)
 
-        perfekte = results[results["Hinweis"].str.contains("Perfekter Treffer")]
-        abweichungen = results[~results["Hinweis"].str.contains("Perfekter Treffer")]
+        if results.empty:
+            st.warning("Keine passenden Produkte gefunden.")
+        else:
+            perfekte = results[results["Hinweis"].str.contains("Perfekter Treffer")]
+            abweichungen = results[~results["Hinweis"].str.contains("Perfekter Treffer")]
 
-        if not perfekte.empty:
-            st.subheader("✅ Perfekte Treffer")
-            st.dataframe(perfekte)
+            if not perfekte.empty:
+                st.subheader("✅ Perfekte Treffer")
+                st.dataframe(perfekte)
 
-        if not abweichungen.empty:
-            st.subheader("⚠️ Treffer mit Abweichungen")
-            st.dataframe(abweichungen)
+            if not abweichungen.empty:
+                st.subheader("⚠️ Treffer mit Abweichungen")
+                st.dataframe(abweichungen)
 
-        st.download_button(
-            label="📥 Ergebnisse als Excel herunterladen",
-            data=results.to_csv(index=False).encode("utf-8"),
-            file_name="Suchergebnisse.csv",
-            mime="text/csv"
-        )
+            st.download_button(
+                label="📥 Ergebnisse als Excel herunterladen",
+                data=results.to_csv(index=False).encode("utf-8"),
+                file_name="Suchergebnisse.csv",
+                mime="text/csv"
+            )
 
     except Exception as e:
         st.error(f"Fehler beim Verarbeiten der Datei: {e}")
@@ -91,18 +94,18 @@ else:
         if chem_name and menge:
             result = finde_treffer(chem_name, menge, einheit, data)
 
-            perfekte = result[result["Hinweis"].str.contains("Perfekter Treffer")]
-            abweichungen = result[~result["Hinweis"].str.contains("Perfekter Treffer")]
-
-            if not perfekte.empty:
-                st.subheader("✅ Perfekte Treffer")
-                st.dataframe(perfekte)
-
-            if not abweichungen.empty:
-                st.subheader("⚠️ Treffer mit Abweichungen")
-                st.dataframe(abweichungen)
-
             if result.empty:
                 st.warning("Keine passenden Produkte gefunden.")
+            else:
+                perfekte = result[result["Hinweis"].str.contains("Perfekter Treffer")]
+                abweichungen = result[~result["Hinweis"].str.contains("Perfekter Treffer")]
+
+                if not perfekte.empty:
+                    st.subheader("✅ Perfekte Treffer")
+                    st.dataframe(perfekte)
+
+                if not abweichungen.empty:
+                    st.subheader("⚠️ Treffer mit Abweichungen")
+                    st.dataframe(abweichungen)
         else:
             st.warning("Bitte alle Felder ausfüllen.")
