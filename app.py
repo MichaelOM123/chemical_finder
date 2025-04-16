@@ -1,21 +1,46 @@
 import streamlit as st
 import pandas as pd
+import re
 
-# Daten laden (hier als Platzhalter, kann durch echte CSV ersetzt werden)
+# Daten laden
 @st.cache_data
 def load_data():
     return pd.read_csv("Aplichem_Daten.csv", sep=None, engine="python")
 
-# Matching-Logik
-def finde_treffer(user_name, user_menge, user_einheit, df):
-    user_menge = float(str(user_menge).replace(",", "."))
-    treffer = []
+# Reinheits-Mapping laden
+@st.cache_data
+def lade_reinheit_mapping():
+    return pd.read_csv("reinheit_mapping.csv")
 
-    suchbegriffe = user_name.lower().split()
+# Reinheit aus Suchtext extrahieren
+def extrahiere_reinheit(suchtext):
+    match = re.search(r"[\u2265>=]?[ ]?(\d{2,3}\.\d+|\d{2,3})%", suchtext)  # ≥99.5% oder 99%
+    if match:
+        return float(match.group(1))
+    return None
+
+# Matching-Logik
+def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
+    user_menge = float(str(user_menge).replace(",", "."))
+    suchbegriffe = user_name.lower().replace(",", ".").split()
+    mindestreinheit = extrahiere_reinheit(user_name)
+    treffer = []
 
     for _, row in df.iterrows():
         produktname = str(row["Deutsche Produktbezeichnung"]).lower()
-        if all(begriff in produktname for begriff in suchbegriffe):
+
+        if all(begriff in produktname for begriff in suchbegriffe if not re.match(r"\d+", begriff)):
+            # Falls Reinheitsanforderung vorhanden ist
+            if mindestreinheit:
+                passende_bezeichnung = None
+                for _, qual_row in mapping_df.iterrows():
+                    if qual_row["Bezeichnung"].lower() in produktname:
+                        if qual_row["Mindestwert"] >= mindestreinheit:
+                            passende_bezeichnung = qual_row["Bezeichnung"]
+                            break
+                if not passende_bezeichnung:
+                    continue  # Keine passende Qualität gefunden
+
             try:
                 menge = float(str(row["Menge"]).replace(",", "."))
                 einheit = str(row["Einheit"]).lower()
@@ -49,6 +74,7 @@ st.markdown("Lade eine Excel-Datei hoch oder gib ein Produkt manuell ein.")
 uploaded_file = st.file_uploader("📂 Excel-Datei mit Chemikalienwünschen hochladen", type=["csv", "xlsx"])
 
 data = load_data()
+mapping = lade_reinheit_mapping()
 
 if uploaded_file:
     try:
@@ -59,7 +85,7 @@ if uploaded_file:
 
         results = pd.DataFrame()
         for _, row in user_df.iterrows():
-            treffer_df = finde_treffer(row["Chemikalie"], row["Menge"], row["Einheit"], data)
+            treffer_df = finde_treffer(row["Chemikalie"], row["Menge"], row["Einheit"], data, mapping)
             results = pd.concat([results, treffer_df], ignore_index=True)
 
         if results.empty:
@@ -92,7 +118,7 @@ else:
 
     if st.button("Suchen"):
         if chem_name and menge:
-            result = finde_treffer(chem_name, menge, einheit, data)
+            result = finde_treffer(chem_name, menge, einheit, data, mapping)
 
             if result.empty:
                 st.warning("Keine passenden Produkte gefunden.")
