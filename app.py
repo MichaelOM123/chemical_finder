@@ -5,7 +5,7 @@ import re
 # Daten laden
 @st.cache_data
 def load_data():
-    return pd.read_csv("Aplichem_Daten.csv", sep=None, engine="python")
+    return pd.read_csv("Aplichem_Daten.csv", sep=None, engine="python", encoding="latin1")
 
 # Reinheits-Mapping laden
 @st.cache_data
@@ -26,7 +26,7 @@ def clean_code(code):
 
 # Text normalisieren (z. B. "ph.eur." → "ph eur")
 def normalize(text):
-    return re.sub(r"[^a-z0-9 ]", " ", text.lower()).replace("  ", " ").strip()
+    return re.sub(r"[^a-z0-9 ]", " ", str(text).lower()).replace("  ", " ").strip()
 
 # Matching-Logik
 def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
@@ -42,7 +42,7 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
         produktname = normalize(produktname_raw)
 
         erkannte_begriffe = []
-        erkannte_reinheit = None
+        erkannte_reinheit = "-"
         gefundene_werte = []
 
         for _, qual_row in mapping_df.iterrows():
@@ -54,12 +54,12 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
         if gefundene_werte:
             erkannte_reinheit = max(gefundene_werte)
 
-        if all(begriff in produktname for begriff in suchbegriffe):
-            try:
-                menge = float(str(row["Menge"]).replace(",", "."))
-                einheit = str(row["Einheit"]).lower()
+        try:
+            menge = float(str(row["Menge"]).replace(",", "."))
+            einheit = str(row["Einheit"]).lower()
 
-                if einheit == user_einheit.lower():
+            if einheit == user_einheit.lower():
+                if all(begriff in produktname for begriff in suchbegriffe):
                     differenz = menge - user_menge
                     if differenz == 0:
                         hinweis = "Perfekter Treffer ✅"
@@ -75,17 +75,11 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
                         "Code": clean_code(row["Code"]),
                         "Hersteller": row["Hersteller"],
                         "Hinweis": hinweis,
-                        "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
+                        "Reinheit erkannt": erkannte_reinheit,
                         "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
                     })
-            except:
-                continue
 
-        elif erkannte_reinheit and mindestreinheit and erkannte_reinheit >= mindestreinheit:
-            try:
-                menge = float(str(row["Menge"]).replace(",", "."))
-                einheit = str(row["Einheit"]).lower()
-                if einheit == user_einheit.lower():
+                elif isinstance(erkannte_reinheit, (int, float)) and mindestreinheit and erkannte_reinheit >= mindestreinheit:
                     aehnliche.append({
                         "Produkt": produktname_raw,
                         "Menge": menge,
@@ -96,8 +90,8 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
                         "Reinheit erkannt": erkannte_reinheit,
                         "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
                     })
-            except:
-                continue
+        except:
+            continue
 
     df_result = pd.DataFrame(treffer)
     df_alt = pd.DataFrame(aehnliche)
