@@ -11,9 +11,11 @@ def finde_treffer(user_name, user_menge, user_einheit, df):
     user_menge = float(str(user_menge).replace(",", "."))
     treffer = []
 
+    suchbegriffe = user_name.lower().split()
+
     for _, row in df.iterrows():
         produktname = str(row["Deutsche Produktbezeichnung"]).lower()
-        if user_name.lower() in produktname:
+        if all(begriff in produktname for begriff in suchbegriffe):
             try:
                 menge = float(str(row["Menge"]).replace(",", "."))
                 einheit = str(row["Einheit"]).lower()
@@ -60,8 +62,16 @@ if uploaded_file:
             treffer_df = finde_treffer(row["Chemikalie"], row["Menge"], row["Einheit"], data)
             results = pd.concat([results, treffer_df], ignore_index=True)
 
-        st.success("Ergebnisse gefunden:")
-        st.dataframe(results)
+        perfekte = results[results["Hinweis"].str.contains("Perfekter Treffer")]
+        abweichungen = results[~results["Hinweis"].str.contains("Perfekter Treffer")]
+
+        if not perfekte.empty:
+            st.subheader("✅ Perfekte Treffer")
+            st.dataframe(perfekte)
+
+        if not abweichungen.empty:
+            st.subheader("⚠️ Treffer mit Abweichungen")
+            st.dataframe(abweichungen)
 
         st.download_button(
             label="📥 Ergebnisse als Excel herunterladen",
@@ -80,10 +90,19 @@ else:
     if st.button("Suchen"):
         if chem_name and menge:
             result = finde_treffer(chem_name, menge, einheit, data)
-            if not result.empty:
-                st.success("Ergebnisse:")
-                st.dataframe(result)
-            else:
+
+            perfekte = result[result["Hinweis"].str.contains("Perfekter Treffer")]
+            abweichungen = result[~result["Hinweis"].str.contains("Perfekter Treffer")]
+
+            if not perfekte.empty:
+                st.subheader("✅ Perfekte Treffer")
+                st.dataframe(perfekte)
+
+            if not abweichungen.empty:
+                st.subheader("⚠️ Treffer mit Abweichungen")
+                st.dataframe(abweichungen)
+
+            if result.empty:
                 st.warning("Keine passenden Produkte gefunden.")
         else:
             st.warning("Bitte alle Felder ausfüllen.")
