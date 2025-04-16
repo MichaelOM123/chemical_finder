@@ -14,7 +14,8 @@ def lade_reinheit_mapping():
 
 # Reinheit aus Suchtext extrahieren
 def extrahiere_reinheit(suchtext):
-    match = re.search(r"[\u2265>=]?[ ]?(\d{2,3}\.\d+|\d{2,3})%", suchtext)  # ≥99.5% oder 99%
+    text = suchtext.replace("≥", ">=").replace("%", "")
+    match = re.search(r">=?\s?(\d{2,3}(\.\d+)?)", text)
     if match:
         return float(match.group(1))
     return None
@@ -26,23 +27,22 @@ def clean_code(code):
 # Matching-Logik
 def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
     user_menge = float(str(user_menge).replace(",", "."))
-    suchbegriffe = user_name.lower().replace(",", ".").split()
-    mindestreinheit = extrahiere_reinheit(user_name)
+    suchtext = user_name.lower().replace(",", ".")
+    mindestreinheit = extrahiere_reinheit(suchtext)
+    suchbegriffe = re.sub(r">=?\s?\d+(\.\d+)?%?", "", suchtext).split()
     treffer = []
 
     for _, row in df.iterrows():
         produktname = str(row["Deutsche Produktbezeichnung"]).lower()
 
-        if all(begriff in produktname for begriff in suchbegriffe if not re.match(r"\d+", begriff)):
-            # Falls Reinheitsanforderung vorhanden ist
+        if all(begriff in produktname for begriff in suchbegriffe):
             if mindestreinheit:
                 gefundene_werte = []
                 for _, qual_row in mapping_df.iterrows():
                     if qual_row["Bezeichnung"].lower() in produktname:
                         gefundene_werte.append(qual_row["Mindestwert"])
-
                 if not gefundene_werte or max(gefundene_werte) < mindestreinheit:
-                    continue  # keine ausreichende Qualität
+                    continue
 
             try:
                 menge = float(str(row["Menge"]).replace(",", "."))
@@ -68,7 +68,10 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
             except:
                 continue
 
-    return pd.DataFrame(treffer)
+    df_result = pd.DataFrame(treffer)
+    if not df_result.empty:
+        df_result.sort_values(by="Hinweis", ascending=False, inplace=True)
+    return df_result
 
 # Streamlit UI
 st.title("🔬 OMNILAB Chemikalien-Finder")
