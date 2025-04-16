@@ -19,6 +19,10 @@ def extrahiere_reinheit(suchtext):
         return float(match.group(1))
     return None
 
+# Artikelnummer vereinheitlichen (nur Ziffern)
+def clean_code(code):
+    return re.sub(r"[^0-9]", "", str(code))
+
 # Matching-Logik
 def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
     user_menge = float(str(user_menge).replace(",", "."))
@@ -32,14 +36,13 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
         if all(begriff in produktname for begriff in suchbegriffe if not re.match(r"\d+", begriff)):
             # Falls Reinheitsanforderung vorhanden ist
             if mindestreinheit:
-                passende_bezeichnung = None
+                gefundene_werte = []
                 for _, qual_row in mapping_df.iterrows():
                     if qual_row["Bezeichnung"].lower() in produktname:
-                        if qual_row["Mindestwert"] >= mindestreinheit:
-                            passende_bezeichnung = qual_row["Bezeichnung"]
-                            break
-                if not passende_bezeichnung:
-                    continue  # Keine passende Qualität gefunden
+                        gefundene_werte.append(qual_row["Mindestwert"])
+
+                if not gefundene_werte or max(gefundene_werte) < mindestreinheit:
+                    continue  # keine ausreichende Qualität
 
             try:
                 menge = float(str(row["Menge"]).replace(",", "."))
@@ -58,7 +61,7 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
                         "Produkt": row["Deutsche Produktbezeichnung"],
                         "Menge": menge,
                         "Einheit": einheit,
-                        "Code": row["Code"],
+                        "Code": clean_code(row["Code"]),
                         "Hersteller": row["Hersteller"],
                         "Hinweis": hinweis
                     })
