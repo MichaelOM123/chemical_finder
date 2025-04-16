@@ -46,7 +46,6 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
                     if bez in produktname:
                         gefundene_werte.append(qual_row["Mindestwert"])
                         erkannte_begriffe.append(bez)
-
                 if not gefundene_werte or max(gefundene_werte) < mindestreinheit:
                     continue
                 erkannte_reinheit = max(gefundene_werte)
@@ -72,7 +71,7 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
                         "Hersteller": row["Hersteller"],
                         "Hinweis": hinweis,
                         "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
-                        "Begriffe gefunden": ", ".join(erkannte_begriffe) if erkannte_begriffe else "-"
+                        "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
                     })
             except:
                 continue
