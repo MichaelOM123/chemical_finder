@@ -24,16 +24,21 @@ def extrahiere_reinheit(suchtext):
 def clean_code(code):
     return re.sub(r"[^0-9]", "", str(code))
 
+# Text normalisieren (z. B. "ph.eur." → "ph eur")
+def normalize(text):
+    return re.sub(r"[^a-z0-9 ]", " ", text.lower()).replace("  ", " ").strip()
+
 # Matching-Logik
 def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
     user_menge = float(str(user_menge).replace(",", "."))
-    suchtext = user_name.lower().replace(",", ".")
+    suchtext = normalize(user_name)
     mindestreinheit = extrahiere_reinheit(suchtext)
     suchbegriffe = re.sub(r">=?\s?\d+(\.\d+)?%?", "", suchtext).split()
     treffer = []
 
     for _, row in df.iterrows():
-        produktname = str(row["Deutsche Produktbezeichnung"]).lower()
+        produktname_raw = str(row["Deutsche Produktbezeichnung"])
+        produktname = normalize(produktname_raw)
 
         if all(begriff in produktname for begriff in suchbegriffe):
             erkannte_begriffe = []
@@ -42,7 +47,7 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
             if mindestreinheit:
                 gefundene_werte = []
                 for _, qual_row in mapping_df.iterrows():
-                    bez = qual_row["Bezeichnung"].lower()
+                    bez = normalize(qual_row["Bezeichnung"])
                     if bez in produktname:
                         gefundene_werte.append(qual_row["Mindestwert"])
                         erkannte_begriffe.append(bez)
@@ -64,7 +69,7 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
                         hinweis = f"Nur {menge} {einheit} verfügbar (kleiner) ⚠️"
 
                     treffer.append({
-                        "Produkt": row["Deutsche Produktbezeichnung"],
+                        "Produkt": produktname_raw,
                         "Menge": menge,
                         "Einheit": einheit,
                         "Code": clean_code(row["Code"]),
