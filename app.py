@@ -35,26 +35,26 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
     mindestreinheit = extrahiere_reinheit(suchtext)
     suchbegriffe = re.sub(r">=?\s?\d+(\.\d+)?%?", "", suchtext).split()
     treffer = []
+    aehnliche = []
 
     for _, row in df.iterrows():
         produktname_raw = str(row["Deutsche Produktbezeichnung"])
         produktname = normalize(produktname_raw)
 
+        erkannte_begriffe = []
+        erkannte_reinheit = None
+        gefundene_werte = []
+
+        for _, qual_row in mapping_df.iterrows():
+            bez = normalize(qual_row["Bezeichnung"])
+            if bez in produktname:
+                gefundene_werte.append(qual_row["Mindestwert"])
+                erkannte_begriffe.append(bez)
+
+        if gefundene_werte:
+            erkannte_reinheit = max(gefundene_werte)
+
         if all(begriff in produktname for begriff in suchbegriffe):
-            erkannte_begriffe = []
-            erkannte_reinheit = None
-
-            if mindestreinheit:
-                gefundene_werte = []
-                for _, qual_row in mapping_df.iterrows():
-                    bez = normalize(qual_row["Bezeichnung"])
-                    if bez in produktname:
-                        gefundene_werte.append(qual_row["Mindestwert"])
-                        erkannte_begriffe.append(bez)
-                if not gefundene_werte or max(gefundene_werte) < mindestreinheit:
-                    continue
-                erkannte_reinheit = max(gefundene_werte)
-
             try:
                 menge = float(str(row["Menge"]).replace(",", "."))
                 einheit = str(row["Einheit"]).lower()
@@ -63,28 +63,65 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
                     differenz = menge - user_menge
                     if differenz == 0:
                         hinweis = "Perfekter Treffer ✅"
+                        treffer.append({
+                            "Produkt": produktname_raw,
+                            "Menge": menge,
+                            "Einheit": einheit,
+                            "Code": clean_code(row["Code"]),
+                            "Hersteller": row["Hersteller"],
+                            "Hinweis": hinweis,
+                            "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
+                            "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
+                        })
                     elif differenz > 0:
                         hinweis = f"Nur {menge} {einheit} verfügbar (größer) ⚠️"
-                    else:
+                        treffer.append({
+                            "Produkt": produktname_raw,
+                            "Menge": menge,
+                            "Einheit": einheit,
+                            "Code": clean_code(row["Code"]),
+                            "Hersteller": row["Hersteller"],
+                            "Hinweis": hinweis,
+                            "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
+                            "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
+                        })
+                    elif differenz < 0:
                         hinweis = f"Nur {menge} {einheit} verfügbar (kleiner) ⚠️"
-
-                    treffer.append({
-                        "Produkt": produktname_raw,
-                        "Menge": menge,
-                        "Einheit": einheit,
-                        "Code": clean_code(row["Code"]),
-                        "Hersteller": row["Hersteller"],
-                        "Hinweis": hinweis,
-                        "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
-                        "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
-                    })
-            except:
-                continue
+                        treffer.append({
+                            "Produkt": produktname_raw,
+                            "Menge": menge,
+                            "Einheit": einheit,
+                            "Code": clean_code(row["Code"]),
+                            "Hersteller": row["Hersteller"],
+                            "Hinweis": hinweis,
+                            "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
+                            "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
+                        })
+        elif erkannte_reinheit and mindestreinheit and erkannte_reinheit >= mindestreinheit:
+            # Ähnliche Produkte mit höherer Reinheit, aber kein Volltreffer auf Name
+            menge = float(str(row["Menge"]).replace(",", "."))
+            einheit = str(row["Einheit"]).lower()
+            if einheit == user_einheit.lower():
+                aehnliche.append({
+                    "Produkt": produktname_raw,
+                    "Menge": menge,
+                    "Einheit": einheit,
+                    "Code": clean_code(row["Code"]),
+                    "Hersteller": row["Hersteller"],
+                    "Hinweis": "Alternative mit höherer Reinheit 🔁",
+                    "Reinheit erkannt": erkannte_reinheit,
+                    "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
+                })
 
     df_result = pd.DataFrame(treffer)
+    df_alt = pd.DataFrame(aehnliche)
+
     if not df_result.empty:
         df_result.sort_values(by="Hinweis", ascending=False, inplace=True)
-    return df_result
+    if not df_alt.empty:
+        df_alt.sort_values(by="Reinheit erkannt", ascending=False, inplace=True)
+
+    return df_result, df_alt
 
 # Streamlit UI
 st.title("🔬 OMNILAB Chemikalien-Finder")
@@ -103,11 +140,14 @@ if uploaded_file:
             user_df = pd.read_excel(uploaded_file)
 
         results = pd.DataFrame()
-        for _, row in user_df.iterrows():
-            treffer_df = finde_treffer(row["Chemikalie"], row["Menge"], row["Einheit"], data, mapping)
-            results = pd.concat([results, treffer_df], ignore_index=True)
+        alt_results = pd.DataFrame()
 
-        if results.empty:
+        for _, row in user_df.iterrows():
+            treffer_df, alt_df = finde_treffer(row["Chemikalie"], row["Menge"], row["Einheit"], data, mapping)
+            results = pd.concat([results, treffer_df], ignore_index=True)
+            alt_results = pd.concat([alt_results, alt_df], ignore_index=True)
+
+        if results.empty and alt_results.empty:
             st.warning("Keine passenden Produkte gefunden.")
         else:
             perfekte = results[results["Hinweis"].str.contains("Perfekter Treffer")]
@@ -120,6 +160,10 @@ if uploaded_file:
             if not abweichungen.empty:
                 st.subheader("⚠️ Treffer mit Abweichungen")
                 st.dataframe(abweichungen)
+
+            if not alt_results.empty:
+                st.subheader("🔁 Ähnliche Produkte mit höherer Reinheit")
+                st.dataframe(alt_results)
 
             st.download_button(
                 label="📥 Ergebnisse als Excel herunterladen",
@@ -137,9 +181,9 @@ else:
 
     if st.button("Suchen"):
         if chem_name and menge:
-            result = finde_treffer(chem_name, menge, einheit, data, mapping)
+            result, alt_result = finde_treffer(chem_name, menge, einheit, data, mapping)
 
-            if result.empty:
+            if result.empty and alt_result.empty:
                 st.warning("Keine passenden Produkte gefunden.")
             else:
                 perfekte = result[result["Hinweis"].str.contains("Perfekter Treffer")]
@@ -152,5 +196,9 @@ else:
                 if not abweichungen.empty:
                     st.subheader("⚠️ Treffer mit Abweichungen")
                     st.dataframe(abweichungen)
+
+                if not alt_result.empty:
+                    st.subheader("🔁 Ähnliche Produkte mit höherer Reinheit")
+                    st.dataframe(alt_result)
         else:
             st.warning("Bitte alle Felder ausfüllen.")
