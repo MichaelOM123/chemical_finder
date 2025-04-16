@@ -63,55 +63,41 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
                     differenz = menge - user_menge
                     if differenz == 0:
                         hinweis = "Perfekter Treffer ✅"
-                        treffer.append({
-                            "Produkt": produktname_raw,
-                            "Menge": menge,
-                            "Einheit": einheit,
-                            "Code": clean_code(row["Code"]),
-                            "Hersteller": row["Hersteller"],
-                            "Hinweis": hinweis,
-                            "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
-                            "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
-                        })
                     elif differenz > 0:
                         hinweis = f"Nur {menge} {einheit} verfügbar (größer) ⚠️"
-                        treffer.append({
-                            "Produkt": produktname_raw,
-                            "Menge": menge,
-                            "Einheit": einheit,
-                            "Code": clean_code(row["Code"]),
-                            "Hersteller": row["Hersteller"],
-                            "Hinweis": hinweis,
-                            "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
-                            "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
-                        })
-                    elif differenz < 0:
+                    else:
                         hinweis = f"Nur {menge} {einheit} verfügbar (kleiner) ⚠️"
-                        treffer.append({
-                            "Produkt": produktname_raw,
-                            "Menge": menge,
-                            "Einheit": einheit,
-                            "Code": clean_code(row["Code"]),
-                            "Hersteller": row["Hersteller"],
-                            "Hinweis": hinweis,
-                            "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
-                            "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
-                        })
+
+                    treffer.append({
+                        "Produkt": produktname_raw,
+                        "Menge": menge,
+                        "Einheit": einheit,
+                        "Code": clean_code(row["Code"]),
+                        "Hersteller": row["Hersteller"],
+                        "Hinweis": hinweis,
+                        "Reinheit erkannt": erkannte_reinheit if erkannte_reinheit else "-",
+                        "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
+                    })
+            except:
+                continue
+
         elif erkannte_reinheit and mindestreinheit and erkannte_reinheit >= mindestreinheit:
-            # Ähnliche Produkte mit höherer Reinheit, aber kein Volltreffer auf Name
-            menge = float(str(row["Menge"]).replace(",", "."))
-            einheit = str(row["Einheit"]).lower()
-            if einheit == user_einheit.lower():
-                aehnliche.append({
-                    "Produkt": produktname_raw,
-                    "Menge": menge,
-                    "Einheit": einheit,
-                    "Code": clean_code(row["Code"]),
-                    "Hersteller": row["Hersteller"],
-                    "Hinweis": "Alternative mit höherer Reinheit 🔁",
-                    "Reinheit erkannt": erkannte_reinheit,
-                    "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
-                })
+            try:
+                menge = float(str(row["Menge"]).replace(",", "."))
+                einheit = str(row["Einheit"]).lower()
+                if einheit == user_einheit.lower():
+                    aehnliche.append({
+                        "Produkt": produktname_raw,
+                        "Menge": menge,
+                        "Einheit": einheit,
+                        "Code": clean_code(row["Code"]),
+                        "Hersteller": row["Hersteller"],
+                        "Hinweis": "Alternative mit höherer Reinheit 🔁",
+                        "Reinheit erkannt": erkannte_reinheit,
+                        "Begriffe gefunden": ", ".join(set(erkannte_begriffe)) if erkannte_begriffe else "-"
+                    })
+            except:
+                continue
 
     df_result = pd.DataFrame(treffer)
     df_alt = pd.DataFrame(aehnliche)
