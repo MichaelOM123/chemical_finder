@@ -34,6 +34,22 @@ def reinheit_aus_text(text):
     werte = [float(w.replace(",", ".")) for w in pattern]
     return max(werte) if werte else None
 
+# Einheitenkonvertierung (z. B. 1000 ml = 1 l)
+def gleiche_menge(menge1, einheit1, menge2, einheit2):
+    umrechnung = {
+        ("ml", "l"): 0.001,
+        ("l", "ml"): 1000,
+        ("g", "kg"): 0.001,
+        ("kg", "g"): 1000
+    }
+    if einheit1 == einheit2:
+        return abs(menge1 - menge2) < 0.01
+    if (einheit1, einheit2) in umrechnung:
+        return abs(menge1 * umrechnung[(einheit1, einheit2)] - menge2) < 0.01
+    if (einheit2, einheit1) in umrechnung:
+        return abs(menge2 * umrechnung[(einheit2, einheit1)] - menge1) < 0.01
+    return False
+
 # Matching-Logik
 def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
     user_menge = float(str(user_menge).replace(",", "."))
@@ -70,10 +86,12 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
             menge = float(str(row["Menge"]).replace(",", "."))
             einheit = str(row["Einheit"]).lower()
 
-            if einheit == user_einheit.lower():
-                if all(begriff in produktname for begriff in suchbegriffe):
-                    differenz = menge - user_menge
-                    if differenz == 0:
+            if (einheit == user_einheit.lower()) or gleiche_menge(menge, einheit, user_menge, user_einheit.lower()):
+                # Hauptbegriffe müssen enthalten sein, aber wir erlauben 1-2 irrelevante
+                fehlende_begriffe = [b for b in suchbegriffe if b not in produktname]
+                if len(fehlende_begriffe) <= 1:
+                    differenz = menge - user_menge if einheit == user_einheit.lower() else 0
+                    if gleiche_menge(menge, einheit, user_menge, user_einheit.lower()):
                         hinweis = "Perfekter Treffer ✅"
                     elif differenz > 0:
                         hinweis = f"Nur {menge} {einheit} verfügbar (größer) ⚠️"
