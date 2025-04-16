@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import difflib
 
 # Daten laden (hier als Platzhalter, kann durch echte CSV ersetzt werden)
 @st.cache_data
@@ -14,7 +13,7 @@ def finde_treffer(user_name, user_menge, user_einheit, df):
 
     for _, row in df.iterrows():
         produktname = str(row["Deutsche Produktbezeichnung"]).lower()
-        if difflib.get_close_matches(user_name.lower(), [produktname], n=1, cutoff=0.6):
+        if user_name.lower() in produktname:
             try:
                 menge = float(str(row["Menge"]).replace(",", "."))
                 einheit = str(row["Einheit"]).lower()
@@ -24,9 +23,9 @@ def finde_treffer(user_name, user_menge, user_einheit, df):
                     if differenz == 0:
                         hinweis = "Perfekter Treffer ✅"
                     elif differenz > 0:
-                        hinweis = f"Größere Verpackung: {menge} {einheit} verfügbar ⚠️"
+                        hinweis = f"Nur {menge} {einheit} verfügbar (größer) ⚠️"
                     else:
-                        hinweis = f"Kleinere Verpackung: {menge} {einheit} verfügbar ⚠️"
+                        hinweis = f"Nur {menge} {einheit} verfügbar (kleiner) ⚠️"
 
                     treffer.append({
                         "Produkt": row["Deutsche Produktbezeichnung"],
