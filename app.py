@@ -87,9 +87,9 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
             einheit = str(row["Einheit"]).lower()
 
             if (einheit == user_einheit.lower()) or gleiche_menge(menge, einheit, user_menge, user_einheit.lower()):
-                # Hauptbegriffe müssen enthalten sein, aber wir erlauben 1-2 irrelevante
+                # Hauptbegriffe müssen enthalten sein, aber wir erlauben jetzt 2 fehlende
                 fehlende_begriffe = [b for b in suchbegriffe if b not in produktname]
-                if len(fehlende_begriffe) <= 1:
+                if len(fehlende_begriffe) <= 2:
                     differenz = menge - user_menge if einheit == user_einheit.lower() else 0
                     if gleiche_menge(menge, einheit, user_menge, user_einheit.lower()):
                         hinweis = "Perfekter Treffer ✅"
