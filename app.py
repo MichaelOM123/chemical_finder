@@ -28,6 +28,12 @@ def clean_code(code):
 def normalize(text):
     return re.sub(r"[^a-z0-9 ]", " ", str(text).lower()).replace("  ", " ").strip()
 
+# Reinheit direkt aus Produktbezeichnung extrahieren
+def reinheit_aus_text(text):
+    pattern = re.findall(r"(\d{2,3}[\.,]\d+|\d{2,3})\s?%", text.replace(",", "."))
+    werte = [float(w.replace(",", ".")) for w in pattern]
+    return max(werte) if werte else None
+
 # Matching-Logik
 def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
     user_menge = float(str(user_menge).replace(",", "."))
@@ -45,11 +51,17 @@ def finde_treffer(user_name, user_menge, user_einheit, df, mapping_df):
         erkannte_reinheit = "-"
         gefundene_werte = []
 
+        # Mapping-Begriffe
         for _, qual_row in mapping_df.iterrows():
             bez = normalize(qual_row["Bezeichnung"])
             if bez in produktname:
                 gefundene_werte.append(qual_row["Mindestwert"])
                 erkannte_begriffe.append(bez)
+
+        # Reinheit aus Text zusätzlich extrahieren
+        reinheit_im_namen = reinheit_aus_text(produktname_raw)
+        if reinheit_im_namen:
+            gefundene_werte.append(reinheit_im_namen)
 
         if gefundene_werte:
             erkannte_reinheit = max(gefundene_werte)
