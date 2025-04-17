@@ -1,72 +1,78 @@
+# Produkt-Suchlogik basierend auf Grundstoff, Reinheit und Menge
+import re
 import pandas as pd
-import difflib
-from typing import List, Tuple, Optional
+from difflib import SequenceMatcher
 
-# --- Konfiguration ---
-REINHEIT_KEYWORDS = ["HPLC", ">=99.9%", "≥99.9%", "99.9%"]
+# Lade die Grundstoffliste mit Synonymen (zwei Spalten: 'Name', 'Synonyme')
+def load_grundstoffe(pfad):
+    df = pd.read_csv(pfad, header=None, names=['Name', 'Synonyme'])
+    df['Synonyme'] = df['Synonyme'].fillna('').apply(lambda s: [x.strip() for x in s.split(',') if x.strip()])
+    return df
 
-# --- Hilfsfunktionen ---
-def normalize_string(s: str) -> str:
-    return s.strip().lower()
+def finde_grundstoff(suchtext, grundstoff_df):
+    suchtext_lower = suchtext.lower()
+    for _, row in grundstoff_df.iterrows():
+        name = row['Name'].lower()
+        if name in suchtext_lower:
+            return row['Name']
+        for synonym in row['Synonyme']:
+            if synonym.lower() in suchtext_lower:
+                return row['Name']
+    return None
 
-def extract_menge(text: str) -> Optional[float]:
-    import re
-    match = re.search(r"(\d+[\.,]?\d*)\s*(ml|l|liter|litre)", text.lower())
+def extrahiere_reinheit(suchtext):
+    match = re.search(r"([<>]=?)?\s*(\d{1,3}(?:[\.,]\d+)?)[\s%]*", suchtext)
     if match:
-        value = float(match.group(1).replace(",", "."))
+        return float(match.group(2).replace(',', '.'))
+    if 'hplc' in suchtext.lower():
+        return 99.9
+    return None
+
+def extrahiere_menge(suchtext):
+    match = re.search(r"(\d+(?:[\.,]\d+)?)\s*(ml|l|g|kg)", suchtext.lower())
+    if match:
+        menge = float(match.group(1).replace(',', '.'))
         einheit = match.group(2)
-        if einheit in ["ml"]:
-            return value / 1000
-        else:
-            return value
-    return None
+        return menge, einheit
+    return None, None
 
-def has_reinheit(text: str) -> bool:
-    text = text.lower()
-    return any(k.lower() in text for k in REINHEIT_KEYWORDS)
-
-def compute_score(product: str, grundstoff: str, reinheit: bool, menge_match: bool) -> float:
+def berechne_score(suchtext, produkt, grundstoff):
     score = 0.0
-    if grundstoff in normalize_string(product):
-        score += 1.0
-    if reinheit:
+    suchtext = suchtext.lower()
+    produkt = produkt.lower()
+
+    if grundstoff.lower() in produkt:
         score += 0.5
-    if menge_match:
-        score += 0.5
-    return score
+    ratio = SequenceMatcher(None, suchtext, produkt).ratio()
+    score += ratio * 0.4
 
-# --- Hauptlogik ---
-def finde_grundstoff(suchtext: str, grundstoff_liste: pd.DataFrame) -> Optional[str]:
-    suchtext_norm = normalize_string(suchtext)
-    for _, row in grundstoff_liste.iterrows():
-        name = normalize_string(row["Name"])
-        synonyme = [normalize_string(s) for s in str(row["Synonyme"]).split(",") if s]
-        if name in suchtext_norm or any(syn in suchtext_norm for syn in synonyme):
-            return name
-    return None
+    such_reinheit = extrahiere_reinheit(suchtext)
+    prod_reinheit = extrahiere_reinheit(produkt)
+    if such_reinheit and prod_reinheit:
+        if prod_reinheit >= such_reinheit:
+            score += 0.05
 
-def suche_produkte(suchtext: str, produktdaten: pd.DataFrame, grundstoffe: pd.DataFrame) -> pd.DataFrame:
-    grundstoff = finde_grundstoff(suchtext, grundstoffe)
-    reinheit_erkannt = has_reinheit(suchtext)
-    zielmenge = extract_menge(suchtext)
+    such_menge, such_einheit = extrahiere_menge(suchtext)
+    prod_menge, prod_einheit = extrahiere_menge(produkt)
+    if such_menge and prod_menge and such_einheit == prod_einheit:
+        if abs(such_menge - prod_menge) < 0.1:
+            score += 0.05
 
-    ergebnisse = []
-    for _, produkt in produktdaten.iterrows():
-        produkt_name = produkt["Bezeichnung"]
-        produkt_menge = extract_menge(produkt_name)
-        menge_match = zielmenge is not None and produkt_menge is not None and abs(produkt_menge - zielmenge) < 0.05
+    return round(score, 3)
 
-        score = compute_score(produkt_name, grundstoff if grundstoff else "", has_reinheit(produkt_name) or reinheit_erkannt, menge_match)
+def suche_passende_produkte(suchtext, produktliste, grundstoff_df):
+    grundstoff = finde_grundstoff(suchtext, grundstoff_df)
+    treffer = []
+    for produkt in produktliste:
+        score = berechne_score(suchtext, produkt, grundstoff)
+        if score > 0:
+            treffer.append((produkt, score))
+    treffer.sort(key=lambda x: x[1], reverse=True)
+    return treffer
 
-        if score > 0.0:
-            ergebnisse.append({
-                "Produkt": produkt_name,
-                "Grundstoff": grundstoff,
-                "Reinheit erkannt": has_reinheit(produkt_name),
-                "Menge erkannt": produkt_menge,
-                "Score": round(score, 2)
-            })
-
-    df_result = pd.DataFrame(ergebnisse)
-    df_result = df_result.sort_values(by="Score", ascending=False).reset_index(drop=True)
-    return df_result
+# Beispielnutzung:
+# grundstoffe = load_grundstoffe("Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv")
+# produktliste = ["Toluol HPLC 99.9% 1 l", "Lichorin Lösung 0.5 %", "Aceton extra rein 500 ml"]
+# suchergebnis = suche_passende_produkte("Toluol HPLC Plus ≥99.9% 1 l", produktliste, grundstoffe)
+# for produkt, score in suchergebnis:
+#     print(f"{produkt} -> Score: {score}")
