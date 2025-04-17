@@ -1,84 +1,72 @@
 import streamlit as st
 import pandas as pd
 from rapidfuzz import fuzz, process
-import unicodedata
 
-# ---------- Hilfsfunktionen ----------
-def normalize(text):
-    if pd.isna(text):
-        return ""
-    return unicodedata.normalize("NFKD", str(text)).casefold()
+# === FUNKTIONEN ===
+@st.cache_data
+def load_applichem_data():
+    try:
+        return pd.read_csv("Applichem_Daten.csv")
+    except FileNotFoundError:
+        st.error("❌ Die Datei 'Applichem_Daten.csv' wurde nicht gefunden. Bitte stelle sicher, dass sie im gleichen Verzeichnis liegt.")
+        return pd.DataFrame()
 
-def load_data():
-    return pd.read_csv("Applichem_Daten.csv")
+@st.cache_data
+def load_grundstoffliste():
+    try:
+        df = pd.read_csv("Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv", names=["Grundstoff", "Synonym"])
+        df = df.dropna()
+        return df
+    except FileNotFoundError:
+        st.error("❌ Die Datei mit Grundstoffen wurde nicht gefunden.")
+        return pd.DataFrame()
 
-def load_grundstoffe():
-    df = pd.read_csv("Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv", header=None, names=["Stoff", "Synonyme"])
-    df["Synonyme"] = df["Synonyme"].fillna("")
-    synonym_map = {}
-    for _, row in df.iterrows():
-        synonym_map[normalize(row["Stoff"]).strip()] = row["Stoff"]
-        for syn in row["Synonyme"].split(","):
-            if syn.strip():
-                synonym_map[normalize(syn).strip()] = row["Stoff"]
-    return synonym_map
+def extrahiere_grundstoffe(text, grundstoffliste):
+    kandidaten = []
+    for _, row in grundstoffliste.iterrows():
+        if str(row["Grundstoff"]).lower() in text.lower() or str(row["Synonym"]).lower() in text.lower():
+            kandidaten.append(row["Grundstoff"])
+    return list(set(kandidaten))
 
-def score_product(product_name, query_tokens, grundstoffe_map):
-    name = normalize(product_name)
-    tokens = name.split()
+def berechne_score(produktname, suchbegriff):
+    return fuzz.token_sort_ratio(produktname.lower(), suchbegriff.lower()) / 100
 
-    base_score = 0
-    matching_grundstoff = ""
-    for token in tokens:
-        if token in grundstoffe_map:
-            matching_grundstoff = grundstoffe_map[token]
-            base_score += 0.5
-            break
+# === UI ===
+st.title("🔍 Chemikalien-Suchtool")
 
-    for q in query_tokens:
-        if q in name:
-            base_score += 0.3
-    return base_score, matching_grundstoff
+suchbegriff = st.text_input("Suchbegriff eingeben:", "Toluol HPLC Plus ≥99.9% 1L")
 
-# ---------- Streamlit App ----------
-st.set_page_config(layout="wide")
-st.title("🔍 Chemikalien-Suche")
+grundstoffliste = load_grundstoffliste()
+applichem_data = load_applichem_data()
 
-applichem_data = load_data()
-grudstoffe_map = load_grundstoffe()
+if suchbegriff and not applichem_data.empty:
+    # Grundstoffe extrahieren
+    gefundene_grundstoffe = extrahiere_grundstoffe(suchbegriff, grundstoffliste)
 
-user_query = st.text_input("Suchbegriff eingeben", "Toluol HPLC Plus ≥99.9% 1l")
-uploaded_file = st.file_uploader("🔁 Optionale Vergleichsliste hochladen (CSV mit Produktnamen)", type="csv")
+    trefferliste = []
 
-if st.button("Suchen"):
-    with st.spinner("Suche läuft..."):
-        query = normalize(user_query)
-        query_tokens = query.split()
+    for _, row in applichem_data.iterrows():
+        name = str(row["Produktbezeichnung"])
+        score = berechne_score(name, suchbegriff)
+        enthält_grundstoff = any(gs.lower() in name.lower() for gs in gefundene_grundstoffe)
 
-        results = []
-        for _, row in applichem_data.iterrows():
-            product_name = str(row["Produktname"])
-            score, grundstoff = score_product(product_name, query_tokens, grudstoffe_map)
-            if score > 0:
-                results.append({
-                    "Produktname": product_name,
-                    "Grundstoff": grundstoff,
-                    "Score": round(score, 2),
-                    "Reinheit": row.get("Reinheit", ""),
-                    "Verpackungseinheit": row.get("Verpackungseinheit", ""),
-                    "Hinweise": row.get("Hinweise", "")
-                })
+        if enthält_grundstoff:
+            score += 0.3  # Bonus für Grundstoff-Match
 
-        result_df = pd.DataFrame(results)
-        result_df = result_df.sort_values(by="Score", ascending=False)
+        if "≥99.9%" in suchbegriff and "99.9" in name:
+            score += 0.2
 
-        st.success(f"{len(result_df)} Treffer gefunden")
-        st.dataframe(result_df)
+        if "1L" in suchbegriff or "1 L" in suchbegriff:
+            if "1L" in name or "1 L" in name or "1000 ml" in name:
+                score += 0.1
 
-        csv = result_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="📥 Ergebnisse als CSV herunterladen",
-            data=csv,
-            file_name="Suchergebnisse.csv",
-            mime="text/csv"
-        )
+        trefferliste.append((name, round(score, 2)))
+
+    # Sortieren
+    trefferliste = sorted(trefferliste, key=lambda x: x[1], reverse=True)
+
+    # Anzeigen
+    st.subheader("🔎 Suchergebnisse")
+    for name, score in trefferliste[:10]:
+        st.write(f"**{name}** – Score: `{score}`")
+
