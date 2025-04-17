@@ -2,111 +2,132 @@ import streamlit as st
 import pandas as pd
 import re
 
-# ---------------------- Hilfsfunktionen ----------------------
-def normalize(text):
-    return re.sub(r"[^a-z0-9 ]", " ", str(text).lower()).replace("  ", " ").strip()
+# ------------------ Konfiguration ------------------
+GRUNDSTOFF_FILE = "Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv"
+APPLICHEM_FILE = "Aplichem_Daten.csv"
 
-def clean_code(code):
-    return re.sub(r"[^0-9]", "", str(code))
-
-def gleiche_menge(m1, e1, m2, e2):
-    e1, e2 = e1.strip().lower(), e2.strip().lower()
-    umrechnung = {("ml", "l"): 0.001, ("l", "ml"): 1000, ("g", "kg"): 0.001, ("kg", "g"): 1000}
-    if e1 == e2:
-        return abs(m1 - m2) < 0.01
-    if (e1, e2) in umrechnung:
-        return abs(m1 * umrechnung[(e1, e2)] - m2) < 0.01
-    if (e2, e1) in umrechnung:
-        return abs(m2 * umrechnung[(e2, e1)] - m1) < 0.01
-    return False
-
-def extract_mindestgehalt(text):
-    text = text.replace(",", ".")
-    match = re.search(r"(\d{2,3}(\.\d+)?)\s?%", text)
-    return float(match.group(1)) if match else None
+# ------------------ Hilfsfunktionen ------------------
 
 @st.cache_data
 def load_applichem():
-    return pd.read_csv("Applichem_Daten.csv", sep=None, engine="python", encoding="latin1")
+    return pd.read_csv(APPLICHEM_FILE, sep=None, engine="python", encoding="latin1")
 
 @st.cache_data
 def load_grundstoffe():
-    df = pd.read_csv("Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv", header=None)
-    df.columns = ["Grundstoff", "Synonym"]
+    df = pd.read_csv(GRUNDSTOFF_FILE, header=None, names=["Grundstoff", "Synonym"])
+    df["Grundstoff"] = df["Grundstoff"].astype(str).str.lower()
+    df["Synonym"] = df["Synonym"].astype(str).str.lower()
     return df
 
-# ---------------------- Suche ----------------------
-def finde_treffer(suchtext, menge, einheit, df_appli, df_grundstoffe):
-    suchtext_norm = normalize(suchtext)
-    suchteile = suchtext_norm.split()
-    mindestgehalt = extract_mindestgehalt(suchtext)
-    menge = float(str(menge).replace(",", "."))
-    einheit = einheit.strip().lower()
+def normalize(text):
+    return re.sub(r"[^a-z0-9 ]", " ", str(text).lower()).strip()
 
-    # Grundstoff suchen
-    grundstoff = None
-    for _, row in df_grundstoffe.iterrows():
-        if normalize(row["Grundstoff"]) in suchteile or normalize(str(row["Synonym"])) in suchteile:
-            grundstoff = normalize(row["Grundstoff"])
-            break
+def extrahiere_mindestgehalt(text):
+    text = text.replace("≥", ">=").replace("%", "")
+    match = re.search(r">=?\s?(\d{2,3}(?:[\.,]\d+)?)", text)
+    if match:
+        return float(match.group(1).replace(",", "."))
+    return None
+
+def gleiche_menge(m1, e1, m2, e2):
+    umrechnungen = {
+        ("ml", "l"): 0.001,
+        ("l", "ml"): 1000,
+        ("g", "kg"): 0.001,
+        ("kg", "g"): 1000
+    }
+    if e1 == e2:
+        return abs(m1 - m2) < 0.01
+    if (e1, e2) in umrechnungen:
+        return abs(m1 * umrechnungen[(e1, e2)] - m2) < 0.01
+    if (e2, e1) in umrechnungen:
+        return abs(m2 * umrechnungen[(e2, e1)] - m1) < 0.01
+    return False
+
+def finde_treffer(user_text, user_menge, user_einheit, df_appli, df_grundstoffe):
+    user_text_normalized = normalize(user_text)
+    user_menge = float(str(user_menge).replace(",", "."))
+    user_einheit = user_einheit.lower()
+
+    # Mindestgehalt extrahieren
+    mindestgehalt = extrahiere_mindestgehalt(user_text)
+    suchtext_ohne_gehalt = re.sub(r">=?\s?\d+[\.,]?\d*\s?%?", "", user_text_normalized)
+
+    # Grundstoff identifizieren
+    grundstoffe = df_grundstoffe.dropna().drop_duplicates()
+    gefundene_grundstoffe = grundstoffe[
+        grundstoffe["Grundstoff"].apply(lambda g: g in suchtext_ohne_gehalt)
+        | grundstoffe["Synonym"].apply(lambda s: s in suchtext_ohne_gehalt)
+    ]
+    if gefundene_grundstoffe.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    relevante_begriffe = set(gefundene_grundstoffe["Grundstoff"]).union(set(gefundene_grundstoffe["Synonym"]))
 
     perfekte, abweichungen = [], []
 
     for _, row in df_appli.iterrows():
-        name = str(row["Deutsche Produktbezeichnung"])
-        norm_name = normalize(name)
+        produkt_raw = str(row["Deutsche Produktbezeichnung"])
+        produkt_norm = normalize(produkt_raw)
+        menge = float(str(row["Menge"]).replace(",", ".")) if "Menge" in row else 0
+        einheit = str(row["Einheit"]).lower() if "Einheit" in row else ""
 
-        # Check: Enthält der Produktname den gesuchten Grundstoff?
-        if grundstoff and grundstoff not in norm_name:
+        # Prüfen, ob Grundstoff drin ist
+        if not any(b in produkt_norm for b in relevante_begriffe):
             continue
 
-        # Check: Mindestgehalt
-        if mindestgehalt:
-            gehalt_im_text = extract_mindestgehalt(name)
-            if not gehalt_im_text or gehalt_im_text < mindestgehalt:
-                continue
-
-        # Check: Menge & Einheit
-        try:
-            m = float(str(row["Menge"]).replace(",", "."))
-            e = str(row["Einheit"]).strip().lower()
-        except:
+        # Mindestgehalt prüfen
+        produkt_gehalt = extrahiere_mindestgehalt(produkt_raw)
+        if mindestgehalt and (not produkt_gehalt or produkt_gehalt < mindestgehalt):
             continue
 
-        if gleiche_menge(m, e, menge, einheit):
+        if gleiche_menge(user_menge, user_einheit, menge, einheit):
             hinweis = "Perfekter Treffer ✅"
-            perfekte.append({"Produkt": name, "Menge": m, "Einheit": e, "Hersteller": row["Hersteller"], "Code": clean_code(row["Code"]), "Hinweis": hinweis})
         else:
-            hinweis = f"Abweichende Menge: {m} {e} ⚠️"
-            abweichungen.append({"Produkt": name, "Menge": m, "Einheit": e, "Hersteller": row["Hersteller"], "Code": clean_code(row["Code"]), "Hinweis": hinweis})
+            hinweis = f"{menge} {einheit} abweichend ⚠️"
+
+        eintrag = {
+            "Produkt": produkt_raw,
+            "Code": row["Code"],
+            "Hersteller": row["Hersteller"],
+            "Menge": menge,
+            "Einheit": einheit,
+            "Hinweis": hinweis,
+            "Mindestgehalt im Produkt": produkt_gehalt if produkt_gehalt else "-"
+        }
+
+        if hinweis == "Perfekter Treffer ✅":
+            perfekte.append(eintrag)
+        else:
+            abweichungen.append(eintrag)
 
     return pd.DataFrame(perfekte), pd.DataFrame(abweichungen)
 
-# ---------------------- UI ----------------------
+# ------------------ Streamlit App ------------------
+
 st.title("🔬 OMNILAB Chemikalien-Finder")
-st.markdown("Suche z. B.: `Toluol HPLC ≥99.9% 1 l`")
+st.markdown("Gib ein gewünschtes Produkt ein (z. B. `Toluol HPLC ≥99.9%`, `Aceton 1 l`) und finde passende Treffer.")
 
-chemikalie = st.text_input("🔎 Chemikalienbezeichnung inkl. Menge und ggf. Mindestgehalt")
-menge = st.text_input("Menge", value="1")
-einheit = st.selectbox("Einheit", ["ml", "l", "g", "kg"])
+df_appli = load_applichem()
+df_grundstoffe = load_grundstoffe()
 
-if st.button("Suchen") and chemikalie:
-    try:
-        df_appli = load_applichem()
-        df_grundstoffe = load_grundstoffe()
+chem_name = st.text_input("🔎 Chemikalienname")
+menge = st.text_input("Menge (z. B. 1, 2.5 etc.)")
+einheit = st.selectbox("Einheit", ["ml", "l", "g", "kg", "Stk"])
 
-        perfekte, abweichungen = finde_treffer(chemikalie, menge, einheit, df_appli, df_grundstoffe)
+if st.button("Suchen"):
+    if chem_name and menge:
+        df_perf, df_abw = finde_treffer(chem_name, menge, einheit, df_appli, df_grundstoffe)
 
-        if not perfekte.empty:
-            st.subheader("✅ Perfekte Treffer")
-            st.dataframe(perfekte)
+        if df_perf.empty and df_abw.empty:
+            st.warning("❌ Kein passendes Produkt gefunden.")
+        else:
+            if not df_perf.empty:
+                st.subheader("✅ Perfekte Treffer")
+                st.dataframe(df_perf)
 
-        if not abweichungen.empty:
-            st.subheader("⚠️ Abweichende Produkte")
-            st.dataframe(abweichungen)
-
-        if perfekte.empty and abweichungen.empty:
-            st.info("Keine passenden Produkte gefunden.")
-
-    except Exception as e:
-        st.error(f"Fehler bei der Suche: {e}")
+            if not df_abw.empty:
+                st.subheader("⚠️ Treffer mit Abweichungen")
+                st.dataframe(df_abw)
+    else:
+        st.warning("Bitte alle Felder ausfüllen.")
