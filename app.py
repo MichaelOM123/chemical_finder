@@ -1,121 +1,95 @@
-import pandas as pd
 import streamlit as st
+import pandas as pd
+from rapidfuzz import fuzz, process
 import re
-from io import StringIO
-from rapidfuzz import fuzz
 
 st.set_page_config(page_title="Chemikalien Produktsuche")
 st.title("🔬 Chemikalien Produktsuche")
 
 st.markdown("""
-**Lade die CSV mit Grundstoffen & Synonymen**
+Lade die CSV mit Grundstoffen & Synonymen und gib dann die gewünschten Parameter ein:
 """)
-grundstoff_file = st.file_uploader("", type=["csv", "xlsx"])
 
-# Eingabefelder
-produkttext = st.text_input("🔍 Chemikalienname", "Toluol ≥99.9%")
-menge = st.text_input("Menge (z. B. 1, 2,5 etc.)", "1")
-einheit = st.selectbox("Einheit", ["ml", "l", "g", "kg", "mg"], index=1)
+# Datei-Upload
+uploaded_file = st.file_uploader("Lade die CSV mit Grundstoffen & Synonymen", type=["csv"])
+grundstoffe_df = None
+if uploaded_file is not None:
+    grundstoffe_df = pd.read_csv(uploaded_file, header=None, names=["Grundstoff", "Synonym"])
+    grundstoffe_df.dropna(inplace=True)
 
-suchbegriffe = []
-grundstoffe = set()
-synonyme_map = {}
+    # Setze alle Werte in Kleinbuchstaben
+    grundstoffe_df["Grundstoff"] = grundstoffe_df["Grundstoff"].str.lower().str.strip()
+    grundstoffe_df["Synonym"] = grundstoffe_df["Synonym"].str.lower().str.strip()
 
-# Schritt 1: CSV vorbereiten
-if grundstoff_file is not None:
-    stringio = StringIO(grundstoff_file.getvalue().decode("utf-8"))
-    df_grundstoffe = pd.read_csv(stringio, header=None, names=["Grundstoff", "Synonym"])
+    # Mapping: Synonym -> Grundstoff
+    synonym_map = pd.Series(grundstoffe_df.Grundstoff.values, index=grundstoffe_df.Synonym).to_dict()
+    grundstoff_set = set(grundstoffe_df.Grundstoff.unique())
+    synonym_set = set(synonym_map.keys())
+else:
+    st.warning("Bitte lade eine CSV-Datei mit Grundstoffen & Synonymen hoch.")
 
-    for _, row in df_grundstoffe.iterrows():
-        grundstoff = str(row["Grundstoff"]).strip().lower()
-        synonym = str(row["Synonym"]).strip().lower()
+# Produkteingabe
+st.subheader("Produktliste (ein Produkt pro Zeile)")
+produkt_input = st.text_area("Liste der Produktnamen", height=200)
 
-        grundstoffe.add(grundstoff)
-        if synonym != "nan" and synonym != "":
-            synonyme_map[synonym] = grundstoff
+# Suchtext-Eingabe
+st.subheader("Suchtext eingeben")
+suchbegriff = st.text_input("Chemikalienname")
+menge_input = st.text_input("Menge (z. B. 1, 2.5 etc.)")
+einheit_input = st.selectbox("Einheit", ["", "ml", "l", "g", "kg"])
 
-    # Alle Synonyme ebenfalls als Grundstoff behandeln
-    grundstoffe.update(synonyme_map.keys())
+# Hilfsfunktion
 
-# Beispielproduktliste (diese könntest du auch aus Datei laden)
-produkte = [
-    "Toluol HPLC Plus ≥99.9% 1 l",
-    "Toluol techn. Qualität 99% 1 l",
-    "Toluol reinst 99.95% 2.5 l",
-    "Methanol reinst 99.9% 1 l",
-    "Benzol für Analyse 99.9% 1 l"
-]
+def finde_grundstoff(text):
+    text = text.lower()
+    for token in re.findall(r"\w+", text):
+        if token in grundstoff_set:
+            return token
+        if token in synonym_set:
+            return synonym_map[token]
+    return None
 
-# Suche starten
-if st.button("🔎 Suchen") and grundstoff_file is not None:
-    suchtext = produkttext.strip().lower()
-    extrahierte_grundstoffe = set()
-    erkannte_reinheit = None
-    erkannte_menge = None
-    erkannte_einheit = einheit.lower()
+def extrahiere_reinheit(text):
+    match = re.search(r"[<>]?=?\s?\d{1,3}(\.\d+)?\s?%", text)
+    return match.group(0) if match else "-"
 
-    # Reinheit erkennen
-    match = re.search(r"(≥|>=)\s*(\d{2,3}\.\d+)%", suchtext)
-    if match:
-        erkannte_reinheit = float(match.group(2))
+# Produktsuche starten
+if st.button("Suchen") and uploaded_file is not None and produkt_input:
+    produkte = [p.strip() for p in produkt_input.splitlines() if p.strip()]
+    suchbegriff = suchbegriff.lower()
+    grundstoff_gesucht = finde_grundstoff(suchbegriff)
+    ziel_reinheit = extrahiere_reinheit(suchbegriff)
 
-    # Grundstoffe erkennen
-    for wort in re.findall(r"\w+", suchtext):
-        wort = wort.strip().lower()
-        if wort in grundstoffe:
-            extrahierte_grundstoffe.add(synonyme_map.get(wort, wort))
+    treffer = []
+    for i, produkt in enumerate(produkte):
+        score = fuzz.partial_ratio(suchbegriff, produkt.lower()) / 100
+        produkt_grundstoff = finde_grundstoff(produkt)
+        produkt_reinheit = extrahiere_reinheit(produkt)
+        
+        # Einfache Abweichungserkennung
+        abweichung = []
+        if grundstoff_gesucht and produkt_grundstoff and grundstoff_gesucht != produkt_grundstoff:
+            abweichung.append("Grundstoff unterschiedlich")
+        if ziel_reinheit != "-" and produkt_reinheit != ziel_reinheit:
+            abweichung.append("Reinheit abweichend")
+        if menge_input and menge_input not in produkt:
+            abweichung.append("Menge abweichend")
+        if einheit_input and einheit_input not in produkt:
+            abweichung.append("Einheit abweichend")
 
-    # Menge erkennen
-    menge_match = re.search(r"(\d+[\.,]?\d*)\s*" + re.escape(einheit), suchtext)
-    if menge_match:
-        try:
-            erkannte_menge = float(menge_match.group(1).replace(",", "."))
-        except:
-            erkannte_menge = None
+        treffer.append({
+            "#": i,
+            "Produktname": produkt,
+            "Grundstoff erkannt": produkt_grundstoff or "-",
+            "Reinheit erkannt": produkt_reinheit,
+            "Score": round(score, 2),
+            "Abweichung": ", ".join(abweichung) if abweichung else "-"
+        })
 
-    perfekte_treffer = []
-    abweichungen = []
+    treffer_df = pd.DataFrame(treffer).sort_values(by="Score", ascending=False).reset_index(drop=True)
 
-    for produkt in produkte:
-        ptext = produkt.lower()
-        p_score = fuzz.token_sort_ratio(ptext, suchtext)
-        p_einheit_match = re.search(r"(\d+[\.,]?\d*)\s*(ml|l|g|kg|mg)", ptext)
-        p_menge = None
-        p_einheit = None
+    st.subheader("🔍 Ergebnisse")
+    st.dataframe(treffer_df, use_container_width=True)
 
-        if p_einheit_match:
-            try:
-                p_menge = float(p_einheit_match.group(1).replace(",", "."))
-                p_einheit = p_einheit_match.group(2)
-            except:
-                pass
-
-        p_reinheit_match = re.search(r"(\d{2,3}\.\d+)%", ptext)
-        p_reinheit = float(p_reinheit_match.group(1)) if p_reinheit_match else None
-
-        enthielt_grundstoff = any(g in ptext for g in extrahierte_grundstoffe)
-        menge_match = (erkannte_menge == p_menge and erkannte_einheit == p_einheit)
-        reinheit_match = (p_reinheit is not None and erkannte_reinheit is not None and p_reinheit >= erkannte_reinheit)
-
-        produkt_info = {
-            "Produkt": produkt,
-            "Score": round(p_score / 100, 2),
-            "Grundstoff gefunden": "✅" if enthielt_grundstoff else "❌",
-            "Reinheit erkannt": f"{p_reinheit}%" if p_reinheit else "-",
-            "Menge erkannt": f"{p_menge} {p_einheit}" if p_menge else "-"
-        }
-
-        if enthielt_grundstoff and menge_match and reinheit_match:
-            perfekte_treffer.append(produkt_info)
-        else:
-            abweichungen.append(produkt_info)
-
-    st.markdown("""
-    ### ✅ Perfekte Treffer
-    """)
-    st.dataframe(pd.DataFrame(perfekte_treffer))
-
-    st.markdown("""
-    ### ⚠️ Treffer mit Abweichungen
-    """)
-    st.dataframe(pd.DataFrame(abweichungen))
+elif uploaded_file is None:
+    st.info("Bitte lade zuerst die CSV hoch.")
