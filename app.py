@@ -1,92 +1,91 @@
-# Vollständige App-Logik zur Produktsuche
-import streamlit as st
 import pandas as pd
+import streamlit as st
+import difflib
 import re
-from difflib import SequenceMatcher
 
-# Funktionen zur Datenverarbeitung
-@st.cache_data
-def load_grundstoffe(pfad):
-    df = pd.read_csv(pfad, header=None, names=['Name', 'Synonyme'])
-    df['Synonyme'] = df['Synonyme'].fillna('').apply(lambda s: [x.strip() for x in s.split(',') if x.strip()])
-    return df
+st.set_page_config(page_title="Chemikalien Produktsuche", layout="centered")
+st.title("🧪 Chemikalien Produktsuche")
 
-def finde_grundstoff(suchtext, grundstoff_df):
-    suchtext_lower = suchtext.lower()
-    for _, row in grundstoff_df.iterrows():
-        name = row['Name'].lower()
-        if name in suchtext_lower:
-            return row['Name']
-        for synonym in row['Synonyme']:
-            if synonym.lower() in suchtext_lower:
-                return row['Name']
-    return None
+# Datei-Upload: CSV mit Grundstoffen & Synonymen
+st.subheader("Lade die CSV mit Grundstoffen & Synonymen")
+synonym_file = st.file_uploader("", type="csv")
 
-def extrahiere_reinheit(suchtext):
-    match = re.search(r"([<>]=?)?\s*(\d{1,3}(?:[\.,]\d+)?)[\s%]*", suchtext)
-    if match:
-        return float(match.group(2).replace(',', '.'))
-    if 'hplc' in suchtext.lower():
-        return 99.9
-    return None
+# Eingabe: Produktliste
+st.subheader("Liste der Produktnamen (einer pro Zeile)")
+product_input = st.text_area("", height=200)
 
-def extrahiere_menge(suchtext):
-    match = re.search(r"(\d+(?:[\.,]\d+)?)\s*(ml|l|g|kg)", suchtext.lower())
-    if match:
-        menge = float(match.group(1).replace(',', '.'))
-        einheit = match.group(2)
-        return menge, einheit
-    return None, None
+# Eingabe: Suchtext
+st.subheader("Suchtext eingeben")
+search_query = st.text_input("", placeholder="z. B. Toluol HPLC Plus ≥99.9% 1 l")
 
-def berechne_score(suchtext, produkt, grundstoff):
-    score = 0.0
-    suchtext = suchtext.lower()
-    produkt = produkt.lower()
+# Funktion zur Vereinfachung von Text
+def normalize(text):
+    return re.sub(r"[^a-z0-9%mlg\.\+]+", " ", text.lower())
 
-    if grundstoff and grundstoff.lower() in produkt:
-        score += 0.5
-    ratio = SequenceMatcher(None, suchtext, produkt).ratio()
-    score += ratio * 0.4
+# Funktion: Suche nach Grundstoff & Synonymen
+def find_base_substance(text, synonyms_df):
+    text = normalize(text)
+    best_match = (None, 0.0)
+    for _, row in synonyms_df.iterrows():
+        names = [row['Grundstoff']] + str(row['Synonym']).split(',')
+        for name in names:
+            name = name.strip().lower()
+            if not name:
+                continue
+            score = difflib.SequenceMatcher(None, name, text).ratio()
+            if score > best_match[1]:
+                best_match = (row['Grundstoff'], score)
+    return best_match
 
-    such_reinheit = extrahiere_reinheit(suchtext)
-    prod_reinheit = extrahiere_reinheit(produkt)
-    if such_reinheit and prod_reinheit:
-        if prod_reinheit >= such_reinheit:
-            score += 0.05
+# Funktion: Reinheit extrahieren (z. B. 99.9)
+def extract_purity(text):
+    match = re.search(r"(\d{2,3}[\.,]\d+)%", text)
+    return float(match.group(1).replace(',', '.')) if match else None
 
-    such_menge, such_einheit = extrahiere_menge(suchtext)
-    prod_menge, prod_einheit = extrahiere_menge(produkt)
-    if such_menge and prod_menge and such_einheit == prod_einheit:
-        if abs(such_menge - prod_menge) < 0.1:
-            score += 0.05
+# Funktion: Volumen extrahieren (z. B. 1 l)
+def extract_volume(text):
+    match = re.search(r"(\d+(\.\d+)?)\s*(ml|l|g|kg)", text.lower())
+    return match.group(0) if match else None
 
-    return round(score, 3)
+if synonym_file and product_input and search_query:
+    synonyms_df = pd.read_csv(synonym_file, header=None, names=["Grundstoff", "Synonym"])
+    search_text = normalize(search_query)
+    
+    # Extrahiere relevante Parameter
+    target_substance, base_score = find_base_substance(search_text, synonyms_df)
+    target_purity = extract_purity(search_query)
+    target_volume = extract_volume(search_query)
 
-def suche_passende_produkte(suchtext, produktliste, grundstoff_df):
-    grundstoff = finde_grundstoff(suchtext, grundstoff_df)
-    treffer = []
-    for produkt in produktliste:
-        score = berechne_score(suchtext, produkt, grundstoff)
-        if score > 0:
-            treffer.append((produkt, score))
-    treffer.sort(key=lambda x: x[1], reverse=True)
-    return treffer
+    products = [line.strip() for line in product_input.split("\n") if line.strip()]
 
-# Streamlit App
-st.title("Chemikalien Produktsuche")
+    st.markdown("---")
+    st.subheader("Ergebnisse:")
 
-# Datei Upload und Produktsucheingabe
-grundstoffdatei = st.file_uploader("Lade die CSV mit Grundstoffen & Synonymen", type="csv")
-produkttabelle = st.text_area("Liste der Produktnamen (einer pro Zeile)")
-suchtext = st.text_input("Suchtext eingeben", "Toluol HPLC Plus ≥99.9% 1 l")
+    results = []
+    for product in products:
+        norm_product = normalize(product)
+        base_match, score = find_base_substance(norm_product, synonyms_df)
 
-if grundstoffdatei and produkttabelle:
-    grundstoffe = load_grundstoffe(grundstoffdatei)
-    produktliste = [x.strip() for x in produkttabelle.strip().splitlines() if x.strip()]
-    ergebnisse = suche_passende_produkte(suchtext, produktliste, grundstoffe)
+        if base_match != target_substance:
+            continue
 
-    st.subheader("Suchergebnisse")
-    for produkt, score in ergebnisse:
-        st.markdown(f"**{produkt}**  ")
-        st.markdown(f"Score: `{score}`")
-        st.markdown("---")
+        purity = extract_purity(product)
+        volume = extract_volume(product)
+
+        purity_score = 1.0 if (purity is None or (target_purity and purity >= target_purity)) else 0.5
+        volume_score = 1.0 if (not target_volume or (volume and target_volume in volume)) else 0.5
+
+        final_score = round((score + purity_score + volume_score) / 3, 3)
+
+        if final_score > 0:
+            results.append((product, final_score, volume or '-', purity or '-'))
+
+    results = sorted(results, key=lambda x: x[1], reverse=True)
+
+    if results:
+        for prod, score, vol, pur in results:
+            st.markdown(f"**🔹 {prod}**  ")
+            st.markdown(f"→ Score: `{score}` | Volumen: `{vol}` | Reinheit: `{pur}`")
+            st.markdown("---")
+    else:
+        st.info("Keine passenden Produkte gefunden.")
