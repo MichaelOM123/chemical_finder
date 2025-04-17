@@ -27,7 +27,7 @@ def extract_mindestgehalt(text):
 
 @st.cache_data
 def load_applichem():
-    return pd.read_csv("Aplichem_Daten.csv", sep=None, engine="python", encoding="latin1")
+    return pd.read_csv("Applichem_Daten.csv", sep=None, engine="python", encoding="latin1")
 
 @st.cache_data
 def load_grundstoffe():
