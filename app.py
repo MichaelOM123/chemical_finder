@@ -4,7 +4,7 @@ import re
 
 # ------------------ Konfiguration ------------------
 GRUNDSTOFF_FILE = "Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv"
-APPLICHEM_FILE = "Aplichem_Daten.csv"
+APPLICHEM_FILE = "Applichem_Daten.csv"
 
 # ------------------ Hilfsfunktionen ------------------
 
