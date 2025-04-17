@@ -1,89 +1,72 @@
 import streamlit as st
 import pandas as pd
 from rapidfuzz import fuzz
-import re
 
-# Dateinamen
+# === Konfiguration ===
 APPLICHEM_FILE = "Applichem_Daten.csv"
 GRUNDSTOFF_FILE = "Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv"
 
-# Daten einlesen mit explizitem Trennzeichen
+# === Hilfsfunktionen ===
 def load_applichem_data():
-    return pd.read_csv(APPLICHEM_FILE, sep=";", encoding="utf-8", on_bad_lines="skip")
+    return pd.read_csv(APPLICHEM_FILE, sep=";", encoding="utf-8", dtype=str).fillna("")
 
-def load_grundstoffe():
-    try:
-        df = pd.read_csv(GRUNDSTOFF_FILE, sep=';', header=None)
-        if df.shape[1] < 1:
-            st.error("Die Grundstoff-Datei enthält keine verwertbaren Spalten.")
-            return pd.DataFrame(columns=["Grundstoff", "Synonym"])
+def load_grundstoff_liste():
+    df = pd.read_csv(GRUNDSTOFF_FILE, sep=",", header=None, names=["Grundstoff", "Synonym"], encoding="utf-8")
+    df = df.fillna("")
+    grundstoffe = set(df["Grundstoff"].str.lower())
+    synonyme_map = {}
+    for _, row in df.iterrows():
+        grund = row["Grundstoff"].strip().lower()
+        syn = row["Synonym"].strip().lower()
+        if grund:
+            synonyme_map.setdefault(grund, set()).add(grund)
+        if grund and syn:
+            synonyme_map.setdefault(grund, set()).add(syn)
+    return grundstoffe, synonyme_map
 
-        # Wenn es nur eine Spalte gibt, fügen wir eine leere Synonym-Spalte hinzu
-        if df.shape[1] == 1:
-            df["Synonym"] = ""
-        elif df.shape[1] > 2:
-            df = df.iloc[:, :2]  # nur die ersten beiden Spalten verwenden
+def ermittle_treffer(produktname, df, grundstoff_synonyme):
+    treffer = []
+    suchbegriffe = produktname.lower().split()
 
-        df.columns = ["Grundstoff", "Synonym"]
-        return df
-    except Exception as e:
-        st.error(f"Fehler beim Laden der Grundstoffliste: {e}")
-        return pd.DataFrame(columns=["Grundstoff", "Synonym"])
+    for _, row in df.iterrows():
+        zeilen_text = " ".join([str(val).lower() for val in row.values])
+        score = fuzz.partial_ratio(produktname.lower(), zeilen_text)
 
-def finde_grundstoffe(text, grundstoffe_df):
-    text_lower = text.lower()
-    matches = []
-    for _, row in grundstoffe_df.iterrows():
-        begriff = str(row["Grundstoff"]).lower()
-        synonym = str(row["Synonym"]).lower()
-        if begriff in text_lower or synonym in text_lower:
-            matches.append(begriff)
-    return matches
+        grundstoff_score = 0
+        for grundstoff, synonyme in grundstoff_synonyme.items():
+            if any(syn in zeilen_text for syn in synonyme):
+                grundstoff_score = 100
+                break
 
-def berechne_score(row, suchtext, grundstoffe_df):
-    name = str(row["Bezeichnung"]).lower()
-    suchtext = suchtext.lower()
-    score = fuzz.token_sort_ratio(name, suchtext) / 100
+        reinheit_score = 10 if any("99.9" in val for val in row.values) else 0
+        menge_score = 10 if any("1 l" in str(val).lower() or "1l" in str(val).lower() for val in row.values) else 0
 
-    # Grundstoff-Matching prüfen
-    grundstofftreffer = finde_grundstoffe(name, grundstoffe_df)
-    if grundstofftreffer:
-        score += 0.3  # Bonus für enthaltenen Grundstoff
+        final_score = 0.6 * score + 0.3 * grundstoff_score + 0.05 * reinheit_score + 0.05 * menge_score
 
-    # Reinheit bewerten
-    if re.search(r"99[.,]?9%", name) and ("99.9" in suchtext or "hplc" in suchtext):
-        score += 0.1
+        treffer.append({
+            "Score": round(final_score, 2),
+            "Produktzeile": row.to_dict()
+        })
 
-    # Verpackungseinheit prüfen (z. B. 1 L)
-    if re.search(r"\b1 ?l\b", name) and "1 l" in suchtext:
-        score += 0.1
+    treffer = sorted(treffer, key=lambda x: x["Score"], reverse=True)
+    return treffer
 
-    return min(score, 1.0)
+# === Streamlit UI ===
+st.set_page_config(page_title="Chemikalien-Finder", layout="wide")
+st.title("🔍 Chemikalien Produktsuche")
 
-def filtere_ergebnisse(df, suchtext, grundstoffe_df):
-    df = df.copy()
-    df["Score"] = df.apply(lambda row: berechne_score(row, suchtext, grundstoffe_df), axis=1)
-    df = df[df["Score"] > 0.2]  # nur sinnvolle Treffer
-    return df.sort_values(by="Score", ascending=False)
+suchbegriff = st.text_input("Suchbegriff eingeben", "Toluol HPLC Plus ≥99.9% 1 l")
 
-# UI
-st.title("🔬 Chemikalien Produktsuche")
-suchtext = st.text_input("Suchbegriff eingeben", "Toluol HPLC Plus ≥99.9% 1 L")
+if st.button("Suchen"):
+    with st.spinner("Suche wird durchgeführt..."):
+        df_appli = load_applichem_data()
+        grundstoffe, synonym_map = load_grundstoff_liste()
+        treffer = ermittle_treffer(suchbegriff, df_appli, synonym_map)
 
-# Daten vorbereiten
-try:
-    df_appli = load_applichem_data()
-    df_grundstoffe = load_grundstoffe()
-except FileNotFoundError:
-    st.error("Die Datei 'Applichem_Daten.csv' oder die Grundstoffliste wurde nicht gefunden. Bitte stelle sicher, dass beide im selben Verzeichnis liegen.")
-    st.stop()
-
-# Suche starten
-if st.button("🔎 Suchen"):
-    treffer = filtere_ergebnisse(df_appli, suchtext, df_grundstoffe)
-
-    if treffer.empty:
-        st.warning("Kein passender Treffer gefunden.")
-    else:
-        st.success(f"{len(treffer)} Treffer gefunden:")
-        st.dataframe(treffer[["Artikelnummer", "Bezeichnung", "Score"]])
+        if treffer:
+            st.success(f"{len(treffer)} Treffer gefunden")
+            for eintrag in treffer[:10]:
+                st.markdown(f"**Score:** {eintrag['Score']}")
+                st.json(eintrag["Produktzeile"])
+        else:
+            st.warning("Keine passenden Produkte gefunden.")
