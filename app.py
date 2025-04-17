@@ -2,90 +2,108 @@ import streamlit as st
 import pandas as pd
 import re
 from rapidfuzz import fuzz
+from io import StringIO
 
-# Hilfsfunktion zur Extraktion von Reinheit
-def extract_purity(text):
-    match = re.search(r"(\d{2,3}\.\d{1,2}|\d{2,3})\s*%", text)
-    if match:
-        return float(match.group(1).replace(",", "."))
-    return None
-
-# Hilfsfunktion zur Scoring-Berechnung
-def score_entry(entry, suchbegriff, grundstoffe, menge, einheit):
-    score = 0
-    name = entry["Produkt"].lower()
-    gefunden = []
-    
-    # 1. Grundstoffprüfung
-    for gs in grundstoffe:
-        if gs.lower() in name:
-            score += 1.0
-            gefunden.append(gs)
-            break
-
-    # 2. Reinheit (wenn vorhanden)
-    reinheit_suche = extract_purity(suchbegriff)
-    reinheit_entry = extract_purity(name)
-    if reinheit_suche and reinheit_entry:
-        if reinheit_entry >= reinheit_suche:
-            score += 0.5
-
-    # 3. Menge und Einheit
-    if menge and einheit:
-        menge_pattern = rf"\b{menge}\s*{einheit}\b"
-        if re.search(menge_pattern, name):
-            score += 0.3
-
-    return round(score, 2), ", ".join(gefunden)
-
-# UI Aufbau
+st.set_page_config(page_title="Chemikalien Produktsuche", layout="centered")
 st.title("🔬 Chemikalien Produktsuche")
 
-uploaded_file = st.file_uploader("📄 Lade die CSV mit Grundstoffen & Synonymen", type=["csv"])
-grundstoffe = []
+st.markdown("""
+#### Lade die CSV mit Grundstoffen & Synonymen hoch
+(optional, falls nicht genutzt, erfolgt die Analyse nur anhand des eingegebenen Suchtextes)
+""")
 
-if uploaded_file is not None:
-    df_grundstoffe = pd.read_csv(uploaded_file)
-    for _, row in df_grundstoffe.iterrows():
-        grundstoffe.append(row["Name"])
-        if pd.notna(row["Synonym"]):
-            grundstoffe.append(row["Synonym"])
+# Datei-Upload
+grundstoff_file = st.file_uploader("CSV Datei mit Grundstoffen & Synonymen", type=["csv"])
 
-suchbegriff = st.text_input("🔍 Chemikalienname", "Toluol ≥99.9%")
-menge = st.text_input("Menge (z. B. 1, 2.5 etc.)", "1")
-einheit = st.selectbox("Einheit", ["", "ml", "l", "g", "kg"])
+# Suchtextfelder
+st.markdown("#### Suchtext eingeben")
+suchtext = st.text_input("🔍 Chemikalienname", placeholder="z. B. Toluol ≥99.9%")
+menge = st.text_input("Menge (z. B. 1, 2.5 etc.)", placeholder="1")
+einheit = st.selectbox("Einheit", options=["", "ml", "l", "g", "kg"])
 
-st.markdown("**Liste der Produktnamen (einer pro Zeile)**")
-produktliste_input = st.text_area("Produktnamen", height=200)
-produktnamen = [x.strip() for x in produktliste_input.split("\n") if x.strip()]
+# Produkttabelle (zum Testen intern geladen, später API/Upload)
+st.markdown("#### Liste der Produktnamen (einer pro Zeile)")
+produkttabelle = st.text_area("Produktnamen", height=200, placeholder="Produkt 1\nProdukt 2\n...")
 
-if st.button("🔍 Suchen") and suchbegriff:
-    if not produktnamen:
-        st.warning("Bitte Produktnamen eingeben.")
+# Ergebnisanzeige
+if st.button("🔎 Suchen"):
+    if not suchtext:
+        st.warning("Bitte einen Suchtext eingeben.")
     else:
-        treffer = []
-        for i, name in enumerate(produktnamen):
-            eintrag = {"Produkt": name}
-            score, begriffe = score_entry(eintrag, suchbegriff, grundstoffe, menge, einheit)
-            if score >= 1.0:
-                typ = "Perfekter Treffer"
-            elif score > 0:
-                typ = "Treffer mit Abweichungen"
-            else:
-                continue
-            treffer.append({"Nr": i, "Produkt": name, "Score": score, "Typ": typ, "Begriffe gefunden": begriffe})
+        # Verarbeite Grundstoff-Datei (falls vorhanden)
+        grundstoffe = set()
+        synonym_map = {}
 
-        if not treffer:
+        if grundstoff_file:
+            df_syn = pd.read_csv(grundstoff_file, header=None, names=["Stoff", "Synonym"])
+            for _, row in df_syn.iterrows():
+                stoff = row["Stoff"].strip().lower()
+                synonym = row["Synonym"].strip().lower()
+                grundstoffe.add(stoff)
+                synonym_map[synonym] = stoff
+
+        # Produkte vorbereiten
+        produkte = [p.strip() for p in produkttabelle.strip().splitlines() if p.strip()]
+
+        def parse_reinheit(text):
+            match = re.search(r"([<>]?=?)\s*(\d{1,3}[\.,]?\d{0,2})\s*%", text)
+            return float(match.group(2).replace(",", ".")) if match else None
+
+        def clean_text(text):
+            return re.sub(r"[^\w\s%\.\-]", "", text.lower())
+
+        suchtext_clean = clean_text(suchtext)
+        such_reinheit = parse_reinheit(suchtext)
+
+        results = []
+
+        for produkt in produkte:
+            clean_prod = clean_text(produkt)
+            score = fuzz.partial_ratio(suchtext_clean, clean_prod) / 100.0
+
+            # Reinheit
+            prod_reinheit = parse_reinheit(produkt)
+            reinheit_ok = False
+            if such_reinheit and prod_reinheit:
+                reinheit_ok = prod_reinheit >= such_reinheit
+
+            # Menge + Einheit
+            menge_ok = True
+            if menge:
+                menge_match = re.search(rf"\b{menge}\b", produkt)
+                menge_ok = menge_match is not None
+            einheit_ok = True
+            if einheit:
+                einheit_match = re.search(rf"\b{einheit}\b", produkt)
+                einheit_ok = einheit_match is not None
+
+            # Grundstoffprüfung
+            grundstoff_erkannt = False
+            for syn, ziel in synonym_map.items():
+                if syn in clean_prod:
+                    grundstoff_erkannt = True
+                    break
+            for stoff in grundstoffe:
+                if stoff in clean_prod:
+                    grundstoff_erkannt = True
+                    break
+
+            # Filter
+            if score > 0.3 and menge_ok and einheit_ok:
+                results.append({
+                    "Produkt": produkt,
+                    "Score": round(score, 2),
+                    "Reinheit erkannt": f"{prod_reinheit}%" if prod_reinheit else "-",
+                    "Reinheit OK": "✅" if reinheit_ok else "❌" if prod_reinheit else "-",
+                    "Menge OK": menge_ok,
+                    "Einheit OK": einheit_ok,
+                    "Grundstoff erkannt": "✅" if grundstoff_erkannt else "❌"
+                })
+
+        if not results:
             st.error("❌ Keine passenden Treffer gefunden.")
         else:
-            df_treffer = pd.DataFrame(treffer)
-            df_perfekt = df_treffer[df_treffer["Typ"] == "Perfekter Treffer"]
-            df_abweichung = df_treffer[df_treffer["Typ"] == "Treffer mit Abweichungen"]
-
-            if not df_perfekt.empty:
-                st.success("✅ Perfekte Treffer")
-                st.dataframe(df_perfekt.drop(columns="Typ"))
-
-            if not df_abweichung.empty:
-                st.warning("⚠️ Treffer mit Abweichungen")
-                st.dataframe(df_abweichung.drop(columns="Typ"))
+            df_result = pd.DataFrame(results)
+            df_result = df_result.sort_values(by="Score", ascending=False)
+            st.success(f"✅ {len(df_result)} Treffer gefunden")
+            st.dataframe(df_result.reset_index(drop=True), use_container_width=True)
