@@ -1,9 +1,11 @@
-# Produkt-Suchlogik basierend auf Grundstoff, Reinheit und Menge
-import re
+# Vollständige App-Logik zur Produktsuche
+import streamlit as st
 import pandas as pd
+import re
 from difflib import SequenceMatcher
 
-# Lade die Grundstoffliste mit Synonymen (zwei Spalten: 'Name', 'Synonyme')
+# Funktionen zur Datenverarbeitung
+@st.cache_data
 def load_grundstoffe(pfad):
     df = pd.read_csv(pfad, header=None, names=['Name', 'Synonyme'])
     df['Synonyme'] = df['Synonyme'].fillna('').apply(lambda s: [x.strip() for x in s.split(',') if x.strip()])
@@ -41,7 +43,7 @@ def berechne_score(suchtext, produkt, grundstoff):
     suchtext = suchtext.lower()
     produkt = produkt.lower()
 
-    if grundstoff.lower() in produkt:
+    if grundstoff and grundstoff.lower() in produkt:
         score += 0.5
     ratio = SequenceMatcher(None, suchtext, produkt).ratio()
     score += ratio * 0.4
@@ -70,9 +72,21 @@ def suche_passende_produkte(suchtext, produktliste, grundstoff_df):
     treffer.sort(key=lambda x: x[1], reverse=True)
     return treffer
 
-# Beispielnutzung:
-# grundstoffe = load_grundstoffe("Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv")
-# produktliste = ["Toluol HPLC 99.9% 1 l", "Lichorin Lösung 0.5 %", "Aceton extra rein 500 ml"]
-# suchergebnis = suche_passende_produkte("Toluol HPLC Plus ≥99.9% 1 l", produktliste, grundstoffe)
-# for produkt, score in suchergebnis:
-#     print(f"{produkt} -> Score: {score}")
+# Streamlit App
+st.title("Chemikalien Produktsuche")
+
+# Datei Upload und Produktsucheingabe
+grundstoffdatei = st.file_uploader("Lade die CSV mit Grundstoffen & Synonymen", type="csv")
+produkttabelle = st.text_area("Liste der Produktnamen (einer pro Zeile)")
+suchtext = st.text_input("Suchtext eingeben", "Toluol HPLC Plus ≥99.9% 1 l")
+
+if grundstoffdatei and produkttabelle:
+    grundstoffe = load_grundstoffe(grundstoffdatei)
+    produktliste = [x.strip() for x in produkttabelle.strip().splitlines() if x.strip()]
+    ergebnisse = suche_passende_produkte(suchtext, produktliste, grundstoffe)
+
+    st.subheader("Suchergebnisse")
+    for produkt, score in ergebnisse:
+        st.markdown(f"**{produkt}**  ")
+        st.markdown(f"Score: `{score}`")
+        st.markdown("---")
