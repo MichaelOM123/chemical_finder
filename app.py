@@ -1,123 +1,121 @@
-import csv
- import re
- from rapidfuzz import fuzz
- # Neue Logik zur Bewertung von Produkten basierend auf Sucheingabe
- 
- # --- Konfiguration ---
- GRUNDSTOFF_DATEI = "Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv"
- def bewerte_treffer(produkt, suchbegriff, grundstoff_liste):
-     import re
- 
- # --- Hilfsfunktionen ---
- def lade_grundstoffe(dateipfad):
-     grundstoffe = {}
-     with open(dateipfad, newline='', encoding="utf-8") as csvfile:
-         reader = csv.reader(csvfile, delimiter=';')
-         for zeile in reader:
-             if not zeile:
-                 continue
-             name = zeile[0].strip().lower()
-             synonyme = [s.strip().lower() for s in zeile[1:]] if len(zeile) > 1 else []
-             grundstoffe[name] = set(synonyme)
-     return grundstoffe
-     suchbegriff = suchbegriff.lower()
-     produkt_lower = produkt["Produkt"].lower()
-     menge = produkt.get("Menge", "").lower()
-     einheit = produkt.get("Einheit", "").lower()
-     reinheit = produkt.get("Reinheit", "")
- 
- def finde_grundstoff(suchtext, grundstoffe):
-     suchtext = suchtext.lower()
-     for name, synonyme in grundstoffe.items():
-         if name in suchtext:
-             return name
-         for synonym in synonyme:
-             if synonym in suchtext:
-                 return name
-     return None
- 
- def berechne_score(suchbegriff, produktname, grundstoff):
-     score = 0.0
-     if grundstoff:
-         score += 0.5  # Gewichtung für Grundstoff
-     # HPLC und Reinheit als Bonuspunkte
-     if re.search(r"hplc", suchbegriff, re.IGNORECASE):
-         if "hplc" in produktname.lower():
-             score += 0.2
-     if re.search(r"\d{2,3}\.\d{1,2}%", suchbegriff):
-         reinheit = re.search(r"\d{2,3}\.\d{1,2}%", produktname)
-         if reinheit:
-             score += 0.2
-     score += fuzz.token_sort_ratio(suchbegriff.lower(), produktname.lower()) / 500  # max 0.2
-     return min(score, 1.0)
- 
- def finde_passende_produkte(suchbegriff, produktdaten, grundstoffe):
-     ergebnisse = []
-     for produkt in produktdaten:
-         produktname = produkt["name"]
-         grundstoff = finde_grundstoff(produktname, grundstoffe)
-         score = berechne_score(suchbegriff, produktname, grundstoff)
-         if score > 0.5:
-             ergebnisse.append({
-                 "Produktname": produktname,
-                 "Grundstoff": grundstoff,
-                 "Score": round(score, 2),
-                 "Abweichungen": "-",
-                 "Reinheit": produkt.get("reinheit", ""),
-                 "Verpackungseinheit": produkt.get("verpackung", ""),
-                 "Hinweise": produkt.get("hinweis", "")
-             })
-     return sorted(ergebnisse, key=lambda x: x["Score"], reverse=True)
-     # 1. Grundstoff identifizieren und prüfen
-     grundstoff_treffer = None
-     for eintrag in grundstoff_liste:
-         name = eintrag["Name"].lower()
-         synonyme = [s.strip().lower() for s in eintrag["Synonyme"].split(";") if s.strip()]
-         if name in suchbegriff or any(s in suchbegriff for s in synonyme):
-             if name in produkt_lower or any(s in produkt_lower for s in synonyme):
-                 grundstoff_treffer = name
-                 score += 0.5
-                 break
- 
-     if not grundstoff_treffer:
-         return 0.0  # kein relevanter Grundstoff => irrelevant
- 
-     # 2. Reinheit erkennen und bewerten
-     reinheits_match = re.search(r"[>≥]?\s?([0-9]+,[0-9]+|[0-9]+)\s?%", suchbegriff)
-     if reinheits_match:
-         try:
-             reinheit_gesucht = float(reinheits_match.group(1).replace(",", "."))
-             produkt_reinheit = float(re.sub(r"[^0-9,]", "", reinheit).replace(",", "."))
-             if produkt_reinheit >= reinheit_gesucht:
-                 score += 0.3
-         except:
-             pass
- 
-     # 3. Menge bewerten
-     menge_match = re.search(r"\b(\d+(?:[.,]\d+)?)\s?(ml|l)\b", suchbegriff)
-     if menge_match:
-         gesuchte_menge = float(menge_match.group(1).replace(",", "."))
-         gesuchte_einheit = menge_match.group(2)
- 
-         try:
-             produkt_menge = float(menge.replace(",", "."))
-             if produkt_menge == gesuchte_menge and einheit == gesuchte_einheit:
-                 score += 0.2
-         except:
-             pass
- 
- # --- Beispielnutzung ---
- if __name__ == "__main__":
-     # Beispielproduktdaten für Tests (können ersetzt werden durch echte DB)
-     produktdaten = [
-         {"name": "Toluol HPLC Plus ≥99.9%", "reinheit": "≥99.9%", "verpackung": "1 L", "hinweis": "HPLC"},
-         {"name": "Lycopin Standardlösung 98%", "reinheit": "98%", "verpackung": "1 mg", "hinweis": "Standard"},
-         {"name": "Toluol techn. Qualität", "reinheit": "98%", "verpackung": "2.5 L", "hinweis": "technisch"},
-     ]
-     
-     grundstoffe = lade_grundstoffe(GRUNDSTOFF_DATEI)
-     suchbegriff = "Toluol HPLC Plus ≥99.9%"
-     ergebnisse = finde_passende_produkte(suchbegriff, produktdaten, grundstoffe)
-     for e in ergebnisse:
-         print(e)
-     return round(score, 2)
+import pandas as pd
+import streamlit as st
+import re
+from io import StringIO
+from rapidfuzz import fuzz
+
+st.set_page_config(page_title="Chemikalien Produktsuche")
+st.title("🔬 Chemikalien Produktsuche")
+
+st.markdown("""
+**Lade die CSV mit Grundstoffen & Synonymen**
+""")
+grundstoff_file = st.file_uploader("", type=["csv", "xlsx"])
+
+# Eingabefelder
+produkttext = st.text_input("🔍 Chemikalienname", "Toluol ≥99.9%")
+menge = st.text_input("Menge (z. B. 1, 2,5 etc.)", "1")
+einheit = st.selectbox("Einheit", ["ml", "l", "g", "kg", "mg"], index=1)
+
+suchbegriffe = []
+grundstoffe = set()
+synonyme_map = {}
+
+# Schritt 1: CSV vorbereiten
+if grundstoff_file is not None:
+    stringio = StringIO(grundstoff_file.getvalue().decode("utf-8"))
+    df_grundstoffe = pd.read_csv(stringio, header=None, names=["Grundstoff", "Synonym"])
+
+    for _, row in df_grundstoffe.iterrows():
+        grundstoff = str(row["Grundstoff"]).strip().lower()
+        synonym = str(row["Synonym"]).strip().lower()
+
+        grundstoffe.add(grundstoff)
+        if synonym != "nan" and synonym != "":
+            synonyme_map[synonym] = grundstoff
+
+    # Alle Synonyme ebenfalls als Grundstoff behandeln
+    grundstoffe.update(synonyme_map.keys())
+
+# Beispielproduktliste (diese könntest du auch aus Datei laden)
+produkte = [
+    "Toluol HPLC Plus ≥99.9% 1 l",
+    "Toluol techn. Qualität 99% 1 l",
+    "Toluol reinst 99.95% 2.5 l",
+    "Methanol reinst 99.9% 1 l",
+    "Benzol für Analyse 99.9% 1 l"
+]
+
+# Suche starten
+if st.button("🔎 Suchen") and grundstoff_file is not None:
+    suchtext = produkttext.strip().lower()
+    extrahierte_grundstoffe = set()
+    erkannte_reinheit = None
+    erkannte_menge = None
+    erkannte_einheit = einheit.lower()
+
+    # Reinheit erkennen
+    match = re.search(r"(≥|>=)\s*(\d{2,3}\.\d+)%", suchtext)
+    if match:
+        erkannte_reinheit = float(match.group(2))
+
+    # Grundstoffe erkennen
+    for wort in re.findall(r"\w+", suchtext):
+        wort = wort.strip().lower()
+        if wort in grundstoffe:
+            extrahierte_grundstoffe.add(synonyme_map.get(wort, wort))
+
+    # Menge erkennen
+    menge_match = re.search(r"(\d+[\.,]?\d*)\s*" + re.escape(einheit), suchtext)
+    if menge_match:
+        try:
+            erkannte_menge = float(menge_match.group(1).replace(",", "."))
+        except:
+            erkannte_menge = None
+
+    perfekte_treffer = []
+    abweichungen = []
+
+    for produkt in produkte:
+        ptext = produkt.lower()
+        p_score = fuzz.token_sort_ratio(ptext, suchtext)
+        p_einheit_match = re.search(r"(\d+[\.,]?\d*)\s*(ml|l|g|kg|mg)", ptext)
+        p_menge = None
+        p_einheit = None
+
+        if p_einheit_match:
+            try:
+                p_menge = float(p_einheit_match.group(1).replace(",", "."))
+                p_einheit = p_einheit_match.group(2)
+            except:
+                pass
+
+        p_reinheit_match = re.search(r"(\d{2,3}\.\d+)%", ptext)
+        p_reinheit = float(p_reinheit_match.group(1)) if p_reinheit_match else None
+
+        enthielt_grundstoff = any(g in ptext for g in extrahierte_grundstoffe)
+        menge_match = (erkannte_menge == p_menge and erkannte_einheit == p_einheit)
+        reinheit_match = (p_reinheit is not None and erkannte_reinheit is not None and p_reinheit >= erkannte_reinheit)
+
+        produkt_info = {
+            "Produkt": produkt,
+            "Score": round(p_score / 100, 2),
+            "Grundstoff gefunden": "✅" if enthielt_grundstoff else "❌",
+            "Reinheit erkannt": f"{p_reinheit}%" if p_reinheit else "-",
+            "Menge erkannt": f"{p_menge} {p_einheit}" if p_menge else "-"
+        }
+
+        if enthielt_grundstoff and menge_match and reinheit_match:
+            perfekte_treffer.append(produkt_info)
+        else:
+            abweichungen.append(produkt_info)
+
+    st.markdown("""
+    ### ✅ Perfekte Treffer
+    """)
+    st.dataframe(pd.DataFrame(perfekte_treffer))
+
+    st.markdown("""
+    ### ⚠️ Treffer mit Abweichungen
+    """)
+    st.dataframe(pd.DataFrame(abweichungen))
