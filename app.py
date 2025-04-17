@@ -1,98 +1,76 @@
 import streamlit as st
 import pandas as pd
-import re
 from rapidfuzz import fuzz
+import re
 
-# --- Einstellungen ---
+# Dateinamen
 APPLICHEM_FILE = "Applichem_Daten.csv"
 GRUNDSTOFF_FILE = "Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv"
 
-# --- Hilfsfunktionen ---
-def lade_grundstoffe():
-    df = pd.read_csv(GRUNDSTOFF_FILE, header=None, names=["Grundstoff", "Synonyme"])
-    synonym_map = {}
-    for _, row in df.iterrows():
-        alle_namen = [row["Grundstoff"]] + str(row["Synonyme"]).split(",")
-        alle_namen = [s.strip().lower() for s in alle_namen if s and s.strip() != ""]
-        for name in alle_namen:
-            synonym_map[name] = row["Grundstoff"].lower()
-    return synonym_map
+# Daten einlesen mit explizitem Trennzeichen
+def load_applichem_data():
+    return pd.read_csv(APPLICHEM_FILE, sep=";", encoding="utf-8", on_bad_lines="skip")
 
-def parse_suchtext(suchtext):
-    reinheit_match = re.search(r"(\d{2,3}(\.\d+)?)[ ]*%", suchtext)
-    menge_match = re.search(r"\b(\d+(\.\d+)?)\b", suchtext)
-    einheit_match = re.search(r"\b(ml|l|g|kg)\b", suchtext, re.IGNORECASE)
-    
-    reinheit = float(reinheit_match.group(1)) if reinheit_match else None
-    menge = float(menge_match.group(1)) if menge_match else None
-    einheit = einheit_match.group(1).lower() if einheit_match else None
+def load_grundstoffe():
+    df = pd.read_csv(GRUNDSTOFF_FILE, sep=";", encoding="utf-8", header=None)
+    df.columns = ["Grundstoff", "Synonym"]
+    df = df.dropna()
+    return df
 
-    return reinheit, menge, einheit
+def finde_grundstoffe(text, grundstoffe_df):
+    text_lower = text.lower()
+    matches = []
+    for _, row in grundstoffe_df.iterrows():
+        begriff = str(row["Grundstoff"]).lower()
+        synonym = str(row["Synonym"]).lower()
+        if begriff in text_lower or synonym in text_lower:
+            matches.append(begriff)
+    return matches
 
-def berechne_score(suchtext, produktname, grundstoffe, ziel_reinheit, ziel_menge, ziel_einheit):
-    suchtext_clean = suchtext.lower()
-    produktname_clean = produktname.lower()
+def berechne_score(row, suchtext, grundstoffe_df):
+    name = str(row["Bezeichnung"]).lower()
+    suchtext = suchtext.lower()
+    score = fuzz.token_sort_ratio(name, suchtext) / 100
 
-    # Grundstoff finden
-    gefunden = [stoff for stoff in grundstoffe if stoff in suchtext_clean]
-    if not gefunden:
-        return 0
+    # Grundstoff-Matching prüfen
+    grundstofftreffer = finde_grundstoffe(name, grundstoffe_df)
+    if grundstofftreffer:
+        score += 0.3  # Bonus für enthaltenen Grundstoff
 
-    matched_grundstoff = grundstoffe[gefunden[0]]
-    if matched_grundstoff not in produktname_clean:
-        return 0.1  # schwacher Treffer, Grundstoff nicht im Produktnamen
+    # Reinheit bewerten
+    if re.search(r"99[.,]?9%", name) and ("99.9" in suchtext or "hplc" in suchtext):
+        score += 0.1
 
-    # Score aufbauen
-    score = 1.0
+    # Verpackungseinheit prüfen (z. B. 1 L)
+    if re.search(r"\b1 ?l\b", name) and "1 l" in suchtext:
+        score += 0.1
 
-    if ziel_reinheit and str(ziel_reinheit) not in produktname:
-        score -= 0.3
+    return min(score, 1.0)
 
-    if ziel_menge and str(int(ziel_menge)) not in produktname:
-        score -= 0.2
+def filtere_ergebnisse(df, suchtext, grundstoffe_df):
+    df = df.copy()
+    df["Score"] = df.apply(lambda row: berechne_score(row, suchtext, grundstoffe_df), axis=1)
+    df = df[df["Score"] > 0.2]  # nur sinnvolle Treffer
+    return df.sort_values(by="Score", ascending=False)
 
-    if ziel_einheit and ziel_einheit not in produktname_clean:
-        score -= 0.2
+# UI
+st.title("🔬 Chemikalien Produktsuche")
+suchtext = st.text_input("Suchbegriff eingeben", "Toluol HPLC Plus ≥99.9% 1 L")
 
-    score = max(score, 0.0)
-    return round(score, 2)
-
-def finde_treffer(suchtext, df, grundstoffe):
-    reinheit, menge, einheit = parse_suchtext(suchtext)
-    ergebnisse = []
-
-    for _, row in df.iterrows():
-        produkt = row["Produkt"]
-        score = berechne_score(suchtext, produkt, grundstoffe, reinheit, menge, einheit)
-
-        if score > 0:
-            ergebnisse.append({
-                "Produkt": produkt,
-                "Code": row["Code"],
-                "Reinheit erkannt": reinheit if reinheit else "-",
-                "Score": score
-            })
-
-    return sorted(ergebnisse, key=lambda x: x["Score"], reverse=True)
-
-# --- UI ---
-st.set_page_config(page_title="Chemikalien-Suchtool", layout="centered")
-st.title("🔍 Chemikalien-Suchtool")
-
-suchtext = st.text_input("Suchbegriff eingeben:", "Toluol HPLC Plus ≥99.9% 1L")
-
-# --- Daten laden ---
+# Daten vorbereiten
 try:
-    df_appli = pd.read_csv(APPLICHEM_FILE)
-    grundstoffe = lade_grundstoffe()
-    
-    if suchtext:
-        treffer = finde_treffer(suchtext, df_appli, grundstoffe)
-
-        if treffer:
-            st.success(f"{len(treffer)} Treffer gefunden:")
-            st.dataframe(pd.DataFrame(treffer))
-        else:
-            st.error("❌ Keine passenden Treffer gefunden.")
-except FileNotFoundError as e:
+    df_appli = load_applichem_data()
+    df_grundstoffe = load_grundstoffe()
+except FileNotFoundError:
     st.error("Die Datei 'Applichem_Daten.csv' oder die Grundstoffliste wurde nicht gefunden. Bitte stelle sicher, dass beide im selben Verzeichnis liegen.")
+    st.stop()
+
+# Suche starten
+if st.button("🔎 Suchen"):
+    treffer = filtere_ergebnisse(df_appli, suchtext, df_grundstoffe)
+
+    if treffer.empty:
+        st.warning("Kein passender Treffer gefunden.")
+    else:
+        st.success(f"{len(treffer)} Treffer gefunden:")
+        st.dataframe(treffer[["Artikelnummer", "Bezeichnung", "Score"]])
