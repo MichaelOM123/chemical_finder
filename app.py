@@ -12,10 +12,23 @@ def load_applichem_data():
     return pd.read_csv(APPLICHEM_FILE, sep=";", encoding="utf-8", on_bad_lines="skip")
 
 def load_grundstoffe():
-    df = pd.read_csv(GRUNDSTOFF_FILE, sep=";", encoding="utf-8", header=None)
-    df.columns = ["Grundstoff", "Synonym"]
-    df = df.dropna()
-    return df
+    try:
+        df = pd.read_csv(GRUNDSTOFF_FILE, sep=';', header=None)
+        if df.shape[1] < 1:
+            st.error("Die Grundstoff-Datei enthält keine verwertbaren Spalten.")
+            return pd.DataFrame(columns=["Grundstoff", "Synonym"])
+
+        # Wenn es nur eine Spalte gibt, fügen wir eine leere Synonym-Spalte hinzu
+        if df.shape[1] == 1:
+            df["Synonym"] = ""
+        elif df.shape[1] > 2:
+            df = df.iloc[:, :2]  # nur die ersten beiden Spalten verwenden
+
+        df.columns = ["Grundstoff", "Synonym"]
+        return df
+    except Exception as e:
+        st.error(f"Fehler beim Laden der Grundstoffliste: {e}")
+        return pd.DataFrame(columns=["Grundstoff", "Synonym"])
 
 def finde_grundstoffe(text, grundstoffe_df):
     text_lower = text.lower()
