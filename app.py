@@ -1,72 +1,95 @@
 import streamlit as st
 import pandas as pd
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
+import re
 
-# === Konfiguration ===
-APPLICHEM_FILE = "Applichem_Daten.csv"
-GRUNDSTOFF_FILE = "Chemikalien_mit_Synonymen_bereinigt_final_no_headers.csv"
+st.set_page_config(page_title="Chemikalien Produktsuche")
+st.title("🔬 Chemikalien Produktsuche")
 
-# === Hilfsfunktionen ===
-def load_applichem_data():
-    return pd.read_csv(APPLICHEM_FILE, sep=";", encoding="utf-8", dtype=str).fillna("")
+st.markdown("""
+Lade die CSV mit Grundstoffen & Synonymen und gib dann die gewünschten Parameter ein:
+""")
 
-def load_grundstoff_liste():
-    df = pd.read_csv(GRUNDSTOFF_FILE, sep=",", header=None, names=["Grundstoff", "Synonym"], encoding="utf-8")
-    df = df.fillna("")
-    grundstoffe = set(df["Grundstoff"].str.lower())
-    synonyme_map = {}
-    for _, row in df.iterrows():
-        grund = row["Grundstoff"].strip().lower()
-        syn = row["Synonym"].strip().lower()
-        if grund:
-            synonyme_map.setdefault(grund, set()).add(grund)
-        if grund and syn:
-            synonyme_map.setdefault(grund, set()).add(syn)
-    return grundstoffe, synonyme_map
+# Datei-Upload
+uploaded_file = st.file_uploader("Lade die CSV mit Grundstoffen & Synonymen", type=["csv"])
+grundstoffe_df = None
+if uploaded_file is not None:
+    grundstoffe_df = pd.read_csv(uploaded_file, header=None, names=["Grundstoff", "Synonym"])
+    grundstoffe_df.dropna(inplace=True)
 
-def ermittle_treffer(produktname, df, grundstoff_synonyme):
+    # Setze alle Werte in Kleinbuchstaben
+    grundstoffe_df["Grundstoff"] = grundstoffe_df["Grundstoff"].str.lower().str.strip()
+    grundstoffe_df["Synonym"] = grundstoffe_df["Synonym"].str.lower().str.strip()
+
+    # Mapping: Synonym -> Grundstoff
+    synonym_map = pd.Series(grundstoffe_df.Grundstoff.values, index=grundstoffe_df.Synonym).to_dict()
+    grundstoff_set = set(grundstoffe_df.Grundstoff.unique())
+    synonym_set = set(synonym_map.keys())
+else:
+    st.warning("Bitte lade eine CSV-Datei mit Grundstoffen & Synonymen hoch.")
+
+# Produkteingabe
+st.subheader("Produktliste (ein Produkt pro Zeile)")
+produkt_input = st.text_area("Liste der Produktnamen", height=200)
+
+# Suchtext-Eingabe
+st.subheader("Suchtext eingeben")
+suchbegriff = st.text_input("Chemikalienname")
+menge_input = st.text_input("Menge (z. B. 1, 2.5 etc.)")
+einheit_input = st.selectbox("Einheit", ["", "ml", "l", "g", "kg"])
+
+# Hilfsfunktion
+
+def finde_grundstoff(text):
+    text = text.lower()
+    for token in re.findall(r"\w+", text):
+        if token in grundstoff_set:
+            return token
+        if token in synonym_set:
+            return synonym_map[token]
+    return None
+
+def extrahiere_reinheit(text):
+    match = re.search(r"[<>]?=?\s?\d{1,3}(\.\d+)?\s?%", text)
+    return match.group(0) if match else "-"
+
+# Produktsuche starten
+if st.button("Suchen") and uploaded_file is not None and produkt_input:
+    produkte = [p.strip() for p in produkt_input.splitlines() if p.strip()]
+    suchbegriff = suchbegriff.lower()
+    grundstoff_gesucht = finde_grundstoff(suchbegriff)
+    ziel_reinheit = extrahiere_reinheit(suchbegriff)
+
     treffer = []
-    suchbegriffe = produktname.lower().split()
-
-    for _, row in df.iterrows():
-        zeilen_text = " ".join([str(val).lower() for val in row.values])
-        score = fuzz.partial_ratio(produktname.lower(), zeilen_text)
-
-        grundstoff_score = 0
-        for grundstoff, synonyme in grundstoff_synonyme.items():
-            if any(syn in zeilen_text for syn in synonyme):
-                grundstoff_score = 100
-                break
-
-        reinheit_score = 10 if any("99.9" in val for val in row.values) else 0
-        menge_score = 10 if any("1 l" in str(val).lower() or "1l" in str(val).lower() for val in row.values) else 0
-
-        final_score = 0.6 * score + 0.3 * grundstoff_score + 0.05 * reinheit_score + 0.05 * menge_score
+    for i, produkt in enumerate(produkte):
+        score = fuzz.partial_ratio(suchbegriff, produkt.lower()) / 100
+        produkt_grundstoff = finde_grundstoff(produkt)
+        produkt_reinheit = extrahiere_reinheit(produkt)
+        
+        # Einfache Abweichungserkennung
+        abweichung = []
+        if grundstoff_gesucht and produkt_grundstoff and grundstoff_gesucht != produkt_grundstoff:
+            abweichung.append("Grundstoff unterschiedlich")
+        if ziel_reinheit != "-" and produkt_reinheit != ziel_reinheit:
+            abweichung.append("Reinheit abweichend")
+        if menge_input and menge_input not in produkt:
+            abweichung.append("Menge abweichend")
+        if einheit_input and einheit_input not in produkt:
+            abweichung.append("Einheit abweichend")
 
         treffer.append({
-            "Score": round(final_score, 2),
-            "Produktzeile": row.to_dict()
+            "#": i,
+            "Produktname": produkt,
+            "Grundstoff erkannt": produkt_grundstoff or "-",
+            "Reinheit erkannt": produkt_reinheit,
+            "Score": round(score, 2),
+            "Abweichung": ", ".join(abweichung) if abweichung else "-"
         })
 
-    treffer = sorted(treffer, key=lambda x: x["Score"], reverse=True)
-    return treffer
+    treffer_df = pd.DataFrame(treffer).sort_values(by="Score", ascending=False).reset_index(drop=True)
 
-# === Streamlit UI ===
-st.set_page_config(page_title="Chemikalien-Finder", layout="wide")
-st.title("🔍 Chemikalien Produktsuche")
+    st.subheader("🔍 Ergebnisse")
+    st.dataframe(treffer_df, use_container_width=True)
 
-suchbegriff = st.text_input("Suchbegriff eingeben", "Toluol HPLC Plus ≥99.9% 1 l")
-
-if st.button("Suchen"):
-    with st.spinner("Suche wird durchgeführt..."):
-        df_appli = load_applichem_data()
-        grundstoffe, synonym_map = load_grundstoff_liste()
-        treffer = ermittle_treffer(suchbegriff, df_appli, synonym_map)
-
-        if treffer:
-            st.success(f"{len(treffer)} Treffer gefunden")
-            for eintrag in treffer[:10]:
-                st.markdown(f"**Score:** {eintrag['Score']}")
-                st.json(eintrag["Produktzeile"])
-        else:
-            st.warning("Keine passenden Produkte gefunden.")
+elif uploaded_file is None:
+    st.info("Bitte lade zuerst die CSV hoch.")
